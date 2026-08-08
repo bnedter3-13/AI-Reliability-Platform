@@ -1,0 +1,9 @@
+[project]
+name = "ai-reliability-platform"
+version = "0.1.0"
+description = "AI Reliability Platform (AI Doctor) — SIC AI Capstone Project, Team Nexus AI"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
