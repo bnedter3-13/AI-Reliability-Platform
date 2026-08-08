@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>AI Reliability Platform â Dashboard</title>
+<title>AI Reliability Platform — Dashboard</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -103,7 +103,7 @@
 <div class="refresh-row">
   <div>
     <h1>AI Reliability Platform</h1>
-    <div class="subtitle">Live monitoring dashboard â Team Nexus AI</div>
+    <div class="subtitle">Live monitoring dashboard — Team Nexus AI</div>
   </div>
   <button onclick="loadAll()">Refresh</button>
 </div>
@@ -111,11 +111,11 @@
 <div id="driftBanner" class="drift-banner"></div>
 
 <div class="grid" id="metricsGrid">
-  <div class="card"><div class="label">Total Evaluations</div><div class="value" id="mTotal">â</div></div>
-  <div class="card"><div class="label">Pass Rate</div><div class="value" id="mPassRate">â</div></div>
-  <div class="card"><div class="label">Avg Faithfulness</div><div class="value" id="mFaithfulness">â</div></div>
-  <div class="card"><div class="label">Avg Hallucination Risk</div><div class="value" id="mHallucination">â</div></div>
-  <div class="card"><div class="label">Avg Latency</div><div class="value" id="mLatency">â</div></div>
+  <div class="card"><div class="label">Total Evaluations</div><div class="value" id="mTotal">—</div></div>
+  <div class="card"><div class="label">Pass Rate</div><div class="value" id="mPassRate">—</div></div>
+  <div class="card"><div class="label">Avg Faithfulness</div><div class="value" id="mFaithfulness">—</div></div>
+  <div class="card"><div class="label">Avg Hallucination Risk</div><div class="value" id="mHallucination">—</div></div>
+  <div class="card"><div class="label">Avg Latency</div><div class="value" id="mLatency">—</div></div>
 </div>
 
 <div class="panels">
@@ -132,7 +132,17 @@
 <div class="panel">
   <h2>Recent Evaluations</h2>
   <div id="evalTableWrap">
-    <div class="empty">Loadingâ¦</div>
+    <div class="empty">Loading…</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top: 20px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+    <h2 style="margin:0;">AI Analysis Report</h2>
+    <button onclick="loadAnalysisReport()">Run Analysis</button>
+  </div>
+  <div id="analysisWrap">
+    <div class="empty">Click "Run Analysis" to look for patterns across recent evaluations.</div>
   </div>
 </div>
 
@@ -178,7 +188,7 @@ async function loadDrift() {
     banner.textContent = `Not enough historical data yet to detect drift (need a previous ${d.recent_window_days}-day window).`;
   } else if (d.drift_detected) {
     banner.className = 'drift-banner show alert';
-    banner.textContent = `â  Drift detected: faithfulness dropped ${(d.drop_percentage * 100).toFixed(1)}% vs the previous window.`;
+    banner.textContent = `⚠️ Drift detected: faithfulness dropped ${(d.drop_percentage * 100).toFixed(1)}% vs the previous window.`;
   } else {
     banner.className = 'drift-banner show ok';
     banner.textContent = `No drift detected. Recent avg faithfulness: ${d.recent_avg_faithfulness.toFixed(2)} (previous: ${d.previous_avg_faithfulness.toFixed(2)}).`;
@@ -190,20 +200,20 @@ async function loadEvaluations() {
   const wrap = document.getElementById('evalTableWrap');
 
   if (!rows.length) {
-    wrap.innerHTML = '<div class="empty">No evaluations yet â send a request to /api/v1/health-checks to see it here.</div>';
+    wrap.innerHTML = '<div class="empty">No evaluations yet — send a request to /api/v1/health-checks to see it here.</div>';
     renderCharts([]);
     return;
   }
 
   let html = '<table><thead><tr><th>Question</th><th>Status</th><th>Faithfulness</th><th>Hallucination Risk</th><th>Root Cause</th><th>Time</th></tr></thead><tbody>';
   for (const r of rows) {
-    const time = r.created_at ? new Date(r.created_at).toLocaleString() : 'â';
+    const time = r.created_at ? new Date(r.created_at).toLocaleString() : '—';
     html += `<tr>
       <td class="question-cell">${escapeHtml(r.question)}</td>
       <td><span class="status-badge ${statusClass(r.status)}">${r.status}</span></td>
       <td>${r.faithfulness_score.toFixed(2)}</td>
       <td>${r.hallucination_risk.toFixed(2)}</td>
-      <td class="root-cause">${r.root_cause || 'â'}</td>
+      <td class="root-cause">${r.root_cause || '—'}</td>
       <td class="root-cause">${time}</td>
     </tr>`;
   }
@@ -217,6 +227,32 @@ function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s;
   return div.innerHTML;
+}
+
+async function loadAnalysisReport() {
+  const wrap = document.getElementById('analysisWrap');
+  wrap.innerHTML = '<div class="empty">Analyzing recent evaluations… (this calls the LLM, may take a few seconds)</div>';
+  try {
+    const r = await fetchJSON('/api/v1/analysis-report?limit=20');
+    if (r.sample_size === 0) {
+      wrap.innerHTML = `<div class="empty">${escapeHtml(r.summary)}</div>`;
+      return;
+    }
+    const sevColor = r.severity === 'high' ? 'var(--fail)' : r.severity === 'medium' ? 'var(--warn)' : 'var(--pass)';
+    wrap.innerHTML = `
+      <p style="margin:0 0 12px 0;">${escapeHtml(r.summary)}</p>
+      <table style="margin-bottom:0;">
+        <tr><th style="width:180px;">Dominant issue</th><td>${escapeHtml(r.dominant_issue)}</td></tr>
+        <tr><th>Pattern detected</th><td>${r.pattern_detected ? 'Yes' : 'No'}</td></tr>
+        ${r.pattern_detected ? `<tr><th>Pattern</th><td>${escapeHtml(r.pattern_description)}</td></tr>` : ''}
+        <tr><th>Severity</th><td><span style="color:${sevColor}; font-weight:600; text-transform:uppercase;">${r.severity}</span></td></tr>
+        <tr><th>Suggested action</th><td>${escapeHtml(r.suggested_action)}</td></tr>
+        <tr><th>Sample size</th><td>${r.sample_size} evaluations</td></tr>
+      </table>
+    `;
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty">Could not run analysis: ${err.message}</div>`;
+  }
 }
 
 function renderCharts(rows) {

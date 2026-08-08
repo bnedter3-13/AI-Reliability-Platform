@@ -18,6 +18,7 @@ from app.evaluation.rag_evaluator import evaluate_context_relevance, average_con
 from app.root_cause.analyzer import analyze_root_cause
 from app.monitoring.metrics import get_metrics_summary
 from app.monitoring.drift_detector import check_drift
+from app.agents.analysis_agent import analyze_recent_patterns
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -122,3 +123,18 @@ def list_evaluations(project_id: Optional[str] = None, limit: int = 50, db: Sess
         }
         for r in records
     ]
+
+
+@router.get("/analysis-report")
+def get_analysis_report(project_id: Optional[str] = None, limit: int = 20, db: Session = Depends(get_db)):
+    """
+    AI Analysis Agent (Component 3): looks across the most recent `limit` evaluations
+    as a batch and reports on recurring patterns (e.g. a root cause that keeps repeating,
+    a topic that consistently fails) — insight that no single evaluation's explanation
+    field can surface on its own.
+    """
+    try:
+        report = analyze_recent_patterns(db, project_id=project_id, limit=limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return report.to_dict()
