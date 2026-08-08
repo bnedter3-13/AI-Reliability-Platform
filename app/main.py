@@ -5,11 +5,15 @@ FastAPI application entrypoint for the AI Reliability Platform (AI Doctor).
 """
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 from app.database.connection import init_db
 from app.api.routes import router as api_router
+
+DASHBOARD_PATH = Path(__file__).parent / "dashboard" / "index.html"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -35,3 +39,8 @@ def root() -> dict[str, str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "healthy", "service": "ai-reliability-platform"}
+
+
+@app.get("/dashboard")
+def dashboard() -> FileResponse:
+    return FileResponse(DASHBOARD_PATH)
