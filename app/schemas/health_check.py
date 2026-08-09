@@ -32,6 +32,13 @@ class EvaluationResponse(BaseModel):
     latency_ms: float
 
 
+class RagEvaluationResponse(BaseModel):
+    context_relevance_avg: Optional[float] = None
+    context_precision_avg: Optional[float] = None
+    context_recall_score: Optional[float] = None
+    recall_missing_info: Optional[str] = None
+
+
 class HealthCheckResponse(BaseModel):
     project_id: str
     question: str
@@ -39,3 +46,4 @@ class HealthCheckResponse(BaseModel):
     evaluation: EvaluationResponse
     root_cause: Optional[str] = None
     recommendation: Optional[str] = None
+    rag_evaluation: Optional[RagEvaluationResponse] = None

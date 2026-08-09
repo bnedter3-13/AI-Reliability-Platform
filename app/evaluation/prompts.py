@@ -49,6 +49,42 @@ Respond with ONLY valid JSON, no extra text:
 """
 
 
+CONTEXT_PRECISION_SYSTEM_PROMPT = """You evaluate Context Precision for a RAG system: given a \
+QUESTION, a REFERENCE ANSWER (the known-correct answer), and a single retrieved CONTEXT passage, \
+decide whether that passage was actually USEFUL for producing the reference answer — i.e. does \
+it contain information needed to answer the question correctly? A passage can be topically \
+related but still not useful (e.g. off-topic detail, or duplicate of another passage).
+
+Score is_useful as true or false, and useful_score from 0.0 (not useful at all) to 1.0 \
+(essential to the reference answer).
+
+Respond with ONLY valid JSON, no extra text:
+{
+  "is_useful": <true|false>,
+  "useful_score": <float>,
+  "reason": "<one short sentence>"
+}
+"""
+
+CONTEXT_RECALL_SYSTEM_PROMPT = """You evaluate Context Recall for a RAG system: given a \
+REFERENCE ANSWER (the known-correct answer to a question) and the full set of retrieved \
+CONTEXTS, determine what fraction of the claims/facts in the reference answer are actually \
+supported by (traceable to) the contexts as a whole. This measures whether retrieval found \
+everything needed — a low score means important information was missing from retrieval, even \
+if what WAS retrieved was accurate.
+
+Break the reference answer into its key claims mentally, then check each against the contexts.
+
+Respond with ONLY valid JSON, no extra text:
+{
+  "recall_score": <float 0.0-1.0>,
+  "covered_claims": <int, how many key claims were supported>,
+  "total_claims": <int, total key claims found in the reference answer>,
+  "missing_info": "<brief description of what's missing, or empty string if nothing missing>"
+}
+"""
+
+
 def build_judge_message(question: str, contexts: List[str], answer: str) -> str:
     context_block = "\n".join(f"- {c}" for c in contexts) if contexts else "(no contexts retrieved)"
     return (
@@ -61,3 +97,22 @@ def build_judge_message(question: str, contexts: List[str], answer: str) -> str:
 
 def build_context_relevance_message(question: str, context: str) -> str:
     return f"QUESTION:\n{question}\n\nCONTEXT PASSAGE:\n{context}\n\nEvaluate its relevance now."
+
+
+def build_context_precision_message(question: str, reference_answer: str, context: str) -> str:
+    return (
+        f"QUESTION:\n{question}\n\n"
+        f"REFERENCE ANSWER:\n{reference_answer}\n\n"
+        f"CONTEXT PASSAGE:\n{context}\n\n"
+        "Evaluate its usefulness now."
+    )
+
+
+def build_context_recall_message(question: str, reference_answer: str, contexts: List[str]) -> str:
+    context_block = "\n".join(f"- {c}" for c in contexts) if contexts else "(no contexts retrieved)"
+    return (
+        f"QUESTION:\n{question}\n\n"
+        f"REFERENCE ANSWER:\n{reference_answer}\n\n"
+        f"ALL RETRIEVED CONTEXTS:\n{context_block}\n\n"
+        "Evaluate context recall now."
+    )

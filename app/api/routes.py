@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.database.models import EvaluationRecord
-from app.schemas.health_check import HealthCheckRequest, HealthCheckResponse, EvaluationResponse
+from app.schemas.health_check import HealthCheckRequest, HealthCheckResponse, EvaluationResponse, RagEvaluationResponse
 from app.evaluation.evaluator import evaluate_answer
-from app.evaluation.rag_evaluator import evaluate_context_relevance, average_context_relevance
+from app.evaluation.rag_evaluator import run_full_rag_evaluation
 from app.root_cause.analyzer import analyze_root_cause
 from app.monitoring.metrics import get_metrics_summary
 from app.monitoring.drift_detector import check_drift
@@ -44,15 +44,21 @@ def create_health_check(payload: HealthCheckRequest, db: Session = Depends(get_d
         # instead of letting it bubble up as an opaque 500.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    # Basic RAG evaluation (Component 9) — only run if there are contexts to score,
+    # RAG Evaluation (Component 9) — Context Relevance always; Context Precision/Recall
+    # too if a reference_answer was provided. Only run when there are contexts to score,
     # and only when the answer wasn't a clean pass (keeps API latency/cost down).
+    rag_report = None
     context_relevance_avg = None
     if context_texts and result.status != "pass":
         try:
-            relevance_results = evaluate_context_relevance(payload.question, context_texts)
-            context_relevance_avg = average_context_relevance(relevance_results)
+            rag_report = run_full_rag_evaluation(
+                question=payload.question,
+                contexts=context_texts,
+                reference_answer=payload.reference_answer,
+            )
+            context_relevance_avg = rag_report.context_relevance_avg
         except Exception as exc:
-            logger.warning("Context relevance scoring skipped due to error: %s", exc)
+            logger.warning("RAG evaluation skipped due to error: %s", exc)
 
     root_cause_result = analyze_root_cause(result, context_texts, context_relevance_avg)
 
@@ -87,6 +93,7 @@ def create_health_check(payload: HealthCheckRequest, db: Session = Depends(get_d
         ),
         root_cause=root_cause_result.cause,
         recommendation=root_cause_result.recommendation,
+        rag_evaluation=RagEvaluationResponse(**rag_report.to_dict()) if rag_report else None,
     )
 
 
