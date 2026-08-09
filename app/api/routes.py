@@ -13,12 +13,14 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.database.models import EvaluationRecord
 from app.schemas.health_check import HealthCheckRequest, HealthCheckResponse, EvaluationResponse, RagEvaluationResponse
+from app.schemas.model_comparison import ModelComparisonRequest, ModelComparisonResponse, ModelComparisonResultResponse
 from app.evaluation.evaluator import evaluate_answer
 from app.evaluation.rag_evaluator import run_full_rag_evaluation
 from app.root_cause.analyzer import analyze_root_cause
 from app.monitoring.metrics import get_metrics_summary
 from app.monitoring.drift_detector import check_drift
 from app.agents.analysis_agent import analyze_recent_patterns
+from app.comparison.model_comparator import compare_models, AVAILABLE_MODELS
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -145,3 +147,33 @@ def get_analysis_report(project_id: Optional[str] = None, limit: int = 20, db: S
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return report.to_dict()
+
+
+@router.get("/models")
+def list_available_models():
+    """Models the dashboard's Model Comparison form can offer as checkboxes."""
+    return AVAILABLE_MODELS
+
+
+@router.post("/model-comparison", response_model=ModelComparisonResponse)
+def create_model_comparison(payload: ModelComparisonRequest):
+    """
+    Model Comparison (Component 8): run one question through multiple models -
+    any mix of Anthropic, OpenAI, and Gemini - evaluate each answer with the
+    same judge, and return quality/speed/cost side by side. A model that fails
+    (missing key, API error) comes back with its `error` field set rather than
+    failing the whole request.
+    """
+    context_texts = [c.text for c in payload.contexts]
+
+    results = compare_models(
+        question=payload.question,
+        contexts=context_texts,
+        reference_answer=payload.reference_answer,
+        model_ids=payload.model_ids,
+    )
+
+    return ModelComparisonResponse(
+        question=payload.question,
+        results=[ModelComparisonResultResponse(**r.to_dict()) for r in results],
+    )

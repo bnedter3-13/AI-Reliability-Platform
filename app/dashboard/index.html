@@ -96,6 +96,35 @@
   .drift-banner.show { display: block; }
   .drift-banner.ok { background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.3); color: var(--pass); }
   .drift-banner.alert { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); color: var(--fail); }
+  .cmp-form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+  .cmp-form input[type=text], .cmp-form textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .cmp-form textarea { resize: vertical; min-height: 50px; }
+  .cmp-form label { font-size: 12px; color: var(--muted); margin-bottom: 2px; display: block; }
+  .cmp-checks { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; }
+  .cmp-checks label { color: var(--text); display: flex; align-items: center; gap: 6px; margin: 0; }
+  .provider-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 6px;
+  }
+  .provider-badge.anthropic { background: rgba(210,153,34,0.15); color: var(--warn); }
+  .provider-badge.openai { background: rgba(63,185,80,0.15); color: var(--pass); }
+  .provider-badge.gemini { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .cmp-answer { max-width: 320px; font-size: 12px; color: var(--text); }
+  .cmp-error { color: var(--fail); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -146,6 +175,32 @@
   </div>
 </div>
 
+<div class="panel" style="margin-top: 20px;">
+  <h2>Model Comparison</h2>
+  <div class="cmp-form">
+    <div>
+      <label for="cmpQuestion">Question</label>
+      <input type="text" id="cmpQuestion" placeholder="e.g. What is the capital of France?" />
+    </div>
+    <div>
+      <label for="cmpContext">Context (optional, one passage)</label>
+      <textarea id="cmpContext" placeholder="e.g. Paris is the capital of France."></textarea>
+    </div>
+    <div>
+      <label>Models to compare</label>
+      <div class="cmp-checks" id="cmpModelChecks">
+        <span class="empty" style="padding:0;">Loading available models…</span>
+      </div>
+    </div>
+    <div>
+      <button onclick="runModelComparison()">Compare Models</button>
+    </div>
+  </div>
+  <div id="cmpResultsWrap">
+    <div class="empty">Enter a question above and click "Compare Models".</div>
+  </div>
+</div>
+
 <script>
 const API_BASE = window.location.origin;
 
@@ -188,7 +243,7 @@ async function loadDrift() {
     banner.textContent = `Not enough historical data yet to detect drift (need a previous ${d.recent_window_days}-day window).`;
   } else if (d.drift_detected) {
     banner.className = 'drift-banner show alert';
-    banner.textContent = `⚠️ Drift detected: faithfulness dropped ${(d.drop_percentage * 100).toFixed(1)}% vs the previous window.`;
+    banner.textContent = `⚠ Drift detected: faithfulness dropped ${(d.drop_percentage * 100).toFixed(1)}% vs the previous window.`;
   } else {
     banner.className = 'drift-banner show ok';
     banner.textContent = `No drift detected. Recent avg faithfulness: ${d.recent_avg_faithfulness.toFixed(2)} (previous: ${d.previous_avg_faithfulness.toFixed(2)}).`;
@@ -301,6 +356,96 @@ function renderCharts(rows) {
   });
 }
 
+async function loadAvailableModels() {
+  const wrap = document.getElementById('cmpModelChecks');
+  try {
+    const models = await fetchJSON('/api/v1/models');
+    wrap.innerHTML = models.map(m => `
+      <label>
+        <input type="checkbox" class="cmp-model-cb" value="${m.id}" checked />
+        ${escapeHtml(m.label)}
+        <span class="provider-badge ${m.provider}">${m.provider}</span>
+      </label>
+    `).join('');
+  } catch (err) {
+    wrap.innerHTML = `<span class="cmp-error">Could not load models: ${err.message}</span>`;
+  }
+}
+
+async function runModelComparison() {
+  const question = document.getElementById('cmpQuestion').value.trim();
+  const contextText = document.getElementById('cmpContext').value.trim();
+  const selected = Array.from(document.querySelectorAll('.cmp-model-cb:checked')).map(cb => cb.value);
+  const wrap = document.getElementById('cmpResultsWrap');
+
+  if (!question) {
+    wrap.innerHTML = '<div class="empty">Enter a question first.</div>';
+    return;
+  }
+  if (selected.length === 0) {
+    wrap.innerHTML = '<div class="empty">Select at least one model.</div>';
+    return;
+  }
+
+  wrap.innerHTML = '<div class="empty">Running comparison across models… this calls each model live and may take a several seconds.</div>';
+
+  try {
+    const res = await fetch(API_BASE + '/api/v1/model-comparison', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: 'dashboard',
+        question,
+        contexts: contextText ? [{ text: contextText }] : [],
+        model_ids: selected,
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    renderComparisonResults(data.results);
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty">Comparison failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderComparisonResults(results) {
+  const wrap = document.getElementById('cmpResultsWrap');
+  if (!results.length) {
+    wrap.innerHTML = '<div class="empty">No results.</div>';
+    return;
+  }
+
+  let html = `<table>
+    <thead><tr>
+      <th>Model</th><th>Answer</th><th>Status</th><th>Faithfulness</th>
+      <th>Hallucination Risk</th><th>Latency</th><th>Est. Cost</th>
+    </tr></thead><tbody>`;
+
+  for (const r of results) {
+    if (r.error) {
+      html += `<tr>
+        <td>${escapeHtml(r.model_label)}<span class="provider-badge ${r.provider}">${r.provider}</span></td>
+        <td colspan="6" class="cmp-error">Error: ${escapeHtml(r.error)}</td>
+      </tr>`;
+      continue;
+    }
+    html += `<tr>
+      <td>${escapeHtml(r.model_label)}<span class="provider-badge ${r.provider}">${r.provider}</span></td>
+      <td class="cmp-answer">${escapeHtml(r.answer)}</td>
+      <td>${r.status ? `<span class="status-badge ${statusClass(r.status)}">${r.status}</span>` : '—'}</td>
+      <td>${r.faithfulness_score !== null ? r.faithfulness_score.toFixed(2) : '—'}</td>
+      <td>${r.hallucination_risk !== null ? r.hallucination_risk.toFixed(2) : '—'}</td>
+      <td class="root-cause">${Math.round(r.generation_latency_ms)} ms</td>
+      <td class="root-cause">$${r.estimated_cost_usd.toFixed(6)}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
 async function loadAll() {
   try {
     await loadMetrics();
@@ -314,6 +459,7 @@ async function loadAll() {
 }
 
 loadAll();
+loadAvailableModels();
 setInterval(loadAll, 15000); // auto-refresh every 15s
 </script>
 

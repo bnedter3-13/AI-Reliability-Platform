@@ -13,6 +13,8 @@ load_dotenv()  # reads .env if present; safe no-op in production if env vars are
 
 class Settings:
     ANTHROPIC_API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
+    OPENAI_API_KEY: str | None = os.environ.get("OPENAI_API_KEY")
+    GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "sqlite:///./ai_reliability.db")
     DRIFT_ALERT_THRESHOLD: float = float(os.environ.get("DRIFT_ALERT_THRESHOLD", "0.15"))
     MODEL_NAME: str = "claude-sonnet-5"
