@@ -13,14 +13,15 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.database.models import EvaluationRecord
 from app.schemas.health_check import HealthCheckRequest, HealthCheckResponse, EvaluationResponse, RagEvaluationResponse
-from app.schemas.model_comparison import ModelComparisonRequest, ModelComparisonResponse, ModelComparisonResultResponse
 from app.evaluation.evaluator import evaluate_answer
 from app.evaluation.rag_evaluator import run_full_rag_evaluation
 from app.root_cause.analyzer import analyze_root_cause
+from app.root_cause.smart_recommendation import generate_smart_recommendation
 from app.monitoring.metrics import get_metrics_summary
 from app.monitoring.drift_detector import check_drift
 from app.agents.analysis_agent import analyze_recent_patterns
 from app.comparison.model_comparator import compare_models, AVAILABLE_MODELS
+from app.schemas.model_comparison import ModelComparisonRequest, ModelComparisonResponse, ModelComparisonResultResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -64,6 +65,21 @@ def create_health_check(payload: HealthCheckRequest, db: Session = Depends(get_d
 
     root_cause_result = analyze_root_cause(result, context_texts, context_relevance_avg)
 
+    # Recommendation Engine upgrade (Component 4): try a Claude-generated,
+    # case-specific recommendation; silently falls back to the static one on any error.
+    final_recommendation = root_cause_result.recommendation
+    if root_cause_result.cause not in ("none", "unknown"):
+        try:
+            final_recommendation = generate_smart_recommendation(
+                question=payload.question,
+                answer=payload.answer,
+                cause=root_cause_result.cause,
+                explanation=root_cause_result.explanation,
+                fallback_recommendation=root_cause_result.recommendation,
+            )
+        except Exception as exc:
+            logger.warning("Smart recommendation call failed, using static fallback: %s", exc)
+
     record = EvaluationRecord(
         project_id=payload.project_id,
         question=payload.question,
@@ -76,7 +92,7 @@ def create_health_check(payload: HealthCheckRequest, db: Session = Depends(get_d
         explanation=result.explanation,
         latency_ms=result.latency_ms,
         root_cause=root_cause_result.cause,
-        recommendation=root_cause_result.recommendation,
+        recommendation=final_recommendation,
     )
     db.add(record)
     db.commit()
@@ -94,7 +110,7 @@ def create_health_check(payload: HealthCheckRequest, db: Session = Depends(get_d
             latency_ms=result.latency_ms,
         ),
         root_cause=root_cause_result.cause,
-        recommendation=root_cause_result.recommendation,
+        recommendation=final_recommendation,
         rag_evaluation=RagEvaluationResponse(**rag_report.to_dict()) if rag_report else None,
     )
 
@@ -151,27 +167,28 @@ def get_analysis_report(project_id: Optional[str] = None, limit: int = 20, db: S
 
 @router.get("/models")
 def list_available_models():
-    """Models the dashboard's Model Comparison form can offer as checkboxes."""
+    """List the models available for comparison (Component 8)."""
     return AVAILABLE_MODELS
 
 
 @router.post("/model-comparison", response_model=ModelComparisonResponse)
 def create_model_comparison(payload: ModelComparisonRequest):
     """
-    Model Comparison (Component 8): run one question through multiple models -
-    any mix of Anthropic, OpenAI, and Gemini - evaluate each answer with the
-    same judge, and return quality/speed/cost side by side. A model that fails
-    (missing key, API error) comes back with its `error` field set rather than
-    failing the whole request.
+    Model Comparison (Component 8): runs the same question through multiple models,
+    evaluates each answer with the standard judge, and returns quality/speed/cost
+    for each — so a team can pick the best-fit model for their use case.
     """
     context_texts = [c.text for c in payload.contexts]
 
-    results = compare_models(
-        question=payload.question,
-        contexts=context_texts,
-        reference_answer=payload.reference_answer,
-        model_ids=payload.model_ids,
-    )
+    try:
+        results = compare_models(
+            question=payload.question,
+            contexts=context_texts,
+            reference_answer=payload.reference_answer,
+            model_ids=payload.model_ids,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return ModelComparisonResponse(
         question=payload.question,
