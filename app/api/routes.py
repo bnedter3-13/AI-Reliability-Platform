@@ -22,6 +22,8 @@ from app.monitoring.drift_detector import check_drift
 from app.agents.analysis_agent import analyze_recent_patterns
 from app.comparison.model_comparator import compare_models, AVAILABLE_MODELS
 from app.schemas.model_comparison import ModelComparisonRequest, ModelComparisonResponse, ModelComparisonResultResponse
+from app.evaluation.prompt_evaluator import evaluate_prompt
+from app.schemas.prompt_evaluation import PromptEvaluationRequest, PromptEvaluationResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -194,3 +196,20 @@ def create_model_comparison(payload: ModelComparisonRequest):
         question=payload.question,
         results=[ModelComparisonResultResponse(**r.to_dict()) for r in results],
     )
+
+
+@router.post("/prompt-evaluation", response_model=PromptEvaluationResponse)
+def create_prompt_evaluation(payload: PromptEvaluationRequest):
+    """
+    Prompt Evaluation (Component 7): standalone developer tool — evaluates the
+    quality of a PROMPT itself (clarity, completeness, hallucination risk), not
+    an answer. Run this while writing/revising a prompt, before it ships.
+    """
+    try:
+        result = evaluate_prompt(payload.prompt_text)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return PromptEvaluationResponse(**result.to_dict())
