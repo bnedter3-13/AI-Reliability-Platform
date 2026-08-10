@@ -9,6 +9,12 @@ few-shot examples, calibration, etc. should be added here).
 
 from typing import List
 
+# MLOps Integration (Component 10): bump this string whenever JUDGE_SYSTEM_PROMPT
+# changes in a way that could affect scoring behavior (wording, criteria, format).
+# Combined with the model name in evaluator.py's EVALUATOR_VERSION, this lets the
+# platform compare evaluation quality/behavior across versions over time.
+JUDGE_PROMPT_VERSION = "1.0.0"
+
 JUDGE_SYSTEM_PROMPT = """You are a strict evaluation engine for a Retrieval-Augmented \
 Generation (RAG) system. You will be given a QUESTION, the CONTEXTS that were retrieved for \
 it, and the ANSWER that the AI system produced. Your job is to evaluate the answer, not to \

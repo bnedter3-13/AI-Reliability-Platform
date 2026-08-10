@@ -125,6 +125,21 @@
   .provider-badge.gemini { background: rgba(88,166,255,0.15); color: var(--accent); }
   .cmp-answer { max-width: 320px; font-size: 12px; color: var(--text); }
   .cmp-error { color: var(--fail); font-size: 12px; }
+  .prompt-scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  .prompt-score-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .prompt-score-card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; margin-bottom: 4px; }
+  .prompt-score-card .value { font-size: 20px; font-weight: 600; }
+  .issue-list { margin: 0; padding-left: 18px; font-size: 13px; }
+  .issue-list li { margin-bottom: 6px; color: var(--text); }
+  .rewrite-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 13px;
+    white-space: pre-wrap;
+    margin-top: 8px;
+  }
 </style>
 </head>
 <body>
@@ -198,6 +213,22 @@
   </div>
   <div id="cmpResultsWrap">
     <div class="empty">Enter a question above and click "Compare Models".</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top: 20px;">
+  <h2>Prompt Evaluation</h2>
+  <div class="cmp-form">
+    <div>
+      <label for="promptText">Prompt to evaluate (system prompt or generation template)</label>
+      <textarea id="promptText" style="min-height: 100px;" placeholder="e.g. Answer the user's question as helpfully as possible."></textarea>
+    </div>
+    <div>
+      <button onclick="runPromptEvaluation()">Evaluate Prompt</button>
+    </div>
+  </div>
+  <div id="promptResultsWrap">
+    <div class="empty">Paste a prompt above and click "Evaluate Prompt".</div>
   </div>
 </div>
 
@@ -443,6 +474,80 @@ function renderComparisonResults(results) {
     </tr>`;
   }
   html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+async function runPromptEvaluation() {
+  const promptText = document.getElementById('promptText').value.trim();
+  const wrap = document.getElementById('promptResultsWrap');
+
+  if (!promptText) {
+    wrap.innerHTML = '<div class="empty">Paste a prompt first.</div>';
+    return;
+  }
+
+  wrap.innerHTML = '<div class="empty">Evaluating prompt… this calls the LLM and may take a few seconds.</div>';
+
+  try {
+    const res = await fetch(API_BASE + '/api/v1/prompt-evaluation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt_text: promptText }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    renderPromptEvaluation(data);
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty">Evaluation failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function scoreColorClass(score, inverse) {
+  // inverse=true means lower is better (e.g. hallucination risk)
+  const good = inverse ? score <= 0.3 : score >= 0.7;
+  const bad = inverse ? score >= 0.6 : score <= 0.4;
+  if (good) return 'pass';
+  if (bad) return 'fail';
+  return 'warn';
+}
+
+function renderPromptEvaluation(data) {
+  const wrap = document.getElementById('promptResultsWrap');
+
+  const clarityClass = scoreColorClass(data.clarity_score, false);
+  const completenessClass = scoreColorClass(data.completeness_score, false);
+  const hallucinationClass = scoreColorClass(data.hallucination_risk_score, true);
+
+  let html = `<div class="prompt-scores">
+    <div class="prompt-score-card">
+      <div class="label">Clarity</div>
+      <div class="value ${clarityClass}">${data.clarity_score.toFixed(2)}</div>
+    </div>
+    <div class="prompt-score-card">
+      <div class="label">Completeness</div>
+      <div class="value ${completenessClass}">${data.completeness_score.toFixed(2)}</div>
+    </div>
+    <div class="prompt-score-card">
+      <div class="label">Hallucination Risk</div>
+      <div class="value ${hallucinationClass}">${data.hallucination_risk_score.toFixed(2)}</div>
+    </div>
+  </div>`;
+
+  if (data.issues && data.issues.length) {
+    html += `<div style="margin-bottom:8px; color:var(--muted); font-size:12px; text-transform:uppercase;">Issues Found (${data.issues.length})</div>`;
+    html += '<ul class="issue-list">' + data.issues.map(i => `<li>${escapeHtml(i)}</li>`).join('') + '</ul>';
+  } else {
+    html += '<div class="empty">No issues found — this prompt looks solid.</div>';
+  }
+
+  if (data.suggested_rewrite) {
+    html += `<div style="margin-top:14px; margin-bottom:6px; color:var(--muted); font-size:12px; text-transform:uppercase;">Suggested Rewrite</div>`;
+    html += `<div class="rewrite-box">${escapeHtml(data.suggested_rewrite)}</div>`;
+  }
+
   wrap.innerHTML = html;
 }
 

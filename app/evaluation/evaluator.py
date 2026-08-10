@@ -15,9 +15,15 @@ from typing import List, Optional
 import anthropic
 
 from app.config import settings
-from app.evaluation.prompts import JUDGE_SYSTEM_PROMPT, build_judge_message
+from app.evaluation.prompts import JUDGE_SYSTEM_PROMPT, JUDGE_PROMPT_VERSION, build_judge_message
 
 logger = logging.getLogger(__name__)
+
+# MLOps Integration (Component 10): a version identifier tagged onto every evaluation
+# so performance can be compared across versions later. Bump JUDGE_PROMPT_VERSION in
+# prompts.py whenever the judge prompt changes meaningfully; this composite string
+# also changes automatically if the model itself changes.
+EVALUATOR_VERSION = f"{settings.MODEL_NAME}:{JUDGE_PROMPT_VERSION}"
 
 _client: Optional[anthropic.Anthropic] = (
     anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY) if settings.ANTHROPIC_API_KEY else None

@@ -2,8 +2,9 @@
 app/comparison/model_comparator.py
 
 Model Comparison (Component 8): runs the same question through multiple models -
-across Anthropic, OpenAI, and Google Gemini - evaluates each generated answer with
-the same judge, and compares quality, speed, and estimated cost.
+across Anthropic, OpenAI, Google Gemini, and Qwen (via OpenRouter) - evaluates each
+generated answer with the same judge, and compares quality, speed, and estimated
+cost.
 
 Adding another provider later: write a new _generate_with_<provider>() function
 with the same signature as the existing ones, add its models to AVAILABLE_MODELS
@@ -48,6 +49,8 @@ AVAILABLE_MODELS = [
     {"id": "gpt-4o", "label": "GPT-4o", "provider": "openai"},
     {"id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "provider": "gemini"},
     {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "provider": "gemini"},
+    {"id": "qwen/qwen-2.5-72b-instruct:free", "label": "Qwen 2.5 72B (free)", "provider": "qwen"},
+    {"id": "qwen/qwen-plus", "label": "Qwen Plus", "provider": "qwen"},
 ]
 PROVIDER_BY_MODEL = {m["id"]: m["provider"] for m in AVAILABLE_MODELS}
 LABEL_BY_MODEL = {m["id"]: m["label"] for m in AVAILABLE_MODELS}
@@ -63,6 +66,8 @@ APPROX_PRICING_PER_MILLION_TOKENS = {
     "gpt-4o": {"input": 2.50, "output": 10.00},
     "gemini-3.6-flash": {"input": 1.50, "output": 7.50},
     "gemini-3.5-flash": {"input": 1.50, "output": 9.00},
+    "qwen/qwen-2.5-72b-instruct:free": {"input": 0.0, "output": 0.0},  # free tier, rate-limited
+    "qwen/qwen-plus": {"input": 0.40, "output": 1.20},
 }
 
 GENERATION_SYSTEM_PROMPT = (
@@ -179,10 +184,42 @@ def _generate_with_gemini(model_id: str, question: str, contexts: List[str]) -> 
     return answer_text, latency_ms, input_tokens, output_tokens
 
 
+def _generate_with_qwen(model_id: str, question: str, contexts: List[str]) -> Tuple[str, float, int, int]:
+    if not settings.QWEN_API_KEY:
+        raise RuntimeError("QWEN_API_KEY is not configured (expects an OpenRouter API key).")
+    # Qwen is accessed via OpenRouter (openrouter.ai), which exposes an
+    # OpenAI-compatible API - reuse the `openai` SDK with a different base_url
+    # instead of a separate provider SDK. Model IDs use OpenRouter's
+    # "qwen/<model-name>" format (e.g. "qwen/qwen-2.5-72b-instruct:free" for the
+    # free, rate-limited tier). Check openrouter.ai/models for the current list.
+    from openai import OpenAI
+
+    client = OpenAI(api_key=settings.QWEN_API_KEY, base_url="https://openrouter.ai/api/v1")
+    start = time.perf_counter()
+    response = client.chat.completions.create(
+        model=model_id,
+        max_tokens=400,
+        messages=[
+            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+            {"role": "user", "content": _build_generation_message(question, contexts)},
+        ],
+    )
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    if not response.choices:
+        raise RuntimeError("OpenRouter returned no choices - the model may be rate-limited or unavailable.")
+
+    answer_text = response.choices[0].message.content
+    input_tokens = getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
+    output_tokens = getattr(response.usage, "completion_tokens", 0) if response.usage else 0
+    return answer_text, latency_ms, input_tokens, output_tokens
+
+
 PROVIDER_GENERATORS: dict = {
     "anthropic": _generate_with_anthropic,
     "openai": _generate_with_openai,
     "gemini": _generate_with_gemini,
+    "qwen": _generate_with_qwen,
 }
 
 

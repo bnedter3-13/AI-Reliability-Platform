@@ -33,4 +33,8 @@ class EvaluationRecord(Base):
     root_cause = Column(String, nullable=True)
     recommendation = Column(Text, nullable=True)
 
+    # MLOps Integration (Component 10): which evaluator version (judge prompt + model)
+    # produced this evaluation, so performance can be compared across versions.
+    evaluator_version = Column(String, nullable=True, index=True)
+
     created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)

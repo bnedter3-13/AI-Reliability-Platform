@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.database.models import EvaluationRecord
 from app.schemas.health_check import HealthCheckRequest, HealthCheckResponse, EvaluationResponse, RagEvaluationResponse
-from app.evaluation.evaluator import evaluate_answer
+from app.evaluation.evaluator import evaluate_answer, EVALUATOR_VERSION
 from app.evaluation.rag_evaluator import run_full_rag_evaluation
 from app.root_cause.analyzer import analyze_root_cause
 from app.root_cause.smart_recommendation import generate_smart_recommendation
@@ -24,6 +24,7 @@ from app.comparison.model_comparator import compare_models, AVAILABLE_MODELS
 from app.schemas.model_comparison import ModelComparisonRequest, ModelComparisonResponse, ModelComparisonResultResponse
 from app.evaluation.prompt_evaluator import evaluate_prompt
 from app.schemas.prompt_evaluation import PromptEvaluationRequest, PromptEvaluationResponse
+from app.mlops.version_tracker import list_versions, compare_versions, generate_periodic_report
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -95,6 +96,7 @@ def create_health_check(payload: HealthCheckRequest, db: Session = Depends(get_d
         latency_ms=result.latency_ms,
         root_cause=root_cause_result.cause,
         recommendation=final_recommendation,
+        evaluator_version=EVALUATOR_VERSION,
     )
     db.add(record)
     db.commit()
@@ -213,3 +215,34 @@ def create_prompt_evaluation(payload: PromptEvaluationRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return PromptEvaluationResponse(**result.to_dict())
+
+
+@router.get("/mlops/versions")
+def get_versions(project_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """
+    MLOps Integration (Component 10): list every evaluator version seen so far
+    (judge prompt + model, tagged automatically on each evaluation) with sample counts.
+    """
+    return list_versions(db, project_id=project_id)
+
+
+@router.get("/mlops/compare")
+def get_version_comparison(
+    version_a: str, version_b: str, project_id: Optional[str] = None, db: Session = Depends(get_db)
+):
+    """
+    MLOps Integration (Component 10): regression-test two evaluator versions against
+    each other — compares aggregate faithfulness/pass-rate to catch a prompt or model
+    change that quietly made things worse.
+    """
+    return compare_versions(db, version_a=version_a, version_b=version_b, project_id=project_id).to_dict()
+
+
+@router.get("/mlops/report")
+def get_periodic_report(project_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """
+    MLOps Integration (Component 10): a combined snapshot meant to be pulled on a
+    schedule — current version's performance, drift status, and comparison against
+    the previous version, with a suggested next action.
+    """
+    return generate_periodic_report(db, project_id=project_id)
