@@ -140,6 +140,18 @@
     white-space: pre-wrap;
     margin-top: 8px;
   }
+  .mlops-compare-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; margin-bottom: 14px; }
+  .mlops-version-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; }
+  .mlops-version-card .vname { font-weight: 600; font-size: 13px; margin-bottom: 8px; word-break: break-all; }
+  .mlops-version-card .vrow { display: flex; justify-content: space-between; margin-bottom: 3px; color: var(--muted); }
+  .mlops-version-card .vrow span:last-child { color: var(--text); font-weight: 600; }
+  .mlops-arrow { font-size: 20px; color: var(--muted); text-align: center; }
+  .mlops-verdict { padding: 10px 14px; border-radius: 8px; font-size: 13px; }
+  .mlops-verdict.improve { background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.3); color: var(--pass); }
+  .mlops-verdict.worse { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); color: var(--fail); }
+  .mlops-verdict.neutral { background: rgba(139,152,165,0.1); border: 1px solid var(--border); color: var(--muted); }
+  .version-select-row { display: flex; gap: 10px; align-items: center; margin-top: 10px; font-size: 12px; flex-wrap: wrap; }
+  .version-select-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 8px; font-size: 12px; max-width: 260px; }
 </style>
 </head>
 <body>
@@ -229,6 +241,23 @@
   </div>
   <div id="promptResultsWrap">
     <div class="empty">Paste a prompt above and click "Evaluate Prompt".</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top: 20px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+    <h2 style="margin:0;">MLOps — Version Tracking</h2>
+    <div style="display:flex; gap:8px;">
+      <button onclick="loadMlopsVersions()">Load Version History</button>
+      <button onclick="loadMlopsReport()">Generate Report</button>
+    </div>
+  </div>
+  <div id="mlopsVersionsWrap" style="margin-bottom: 20px;">
+    <div class="empty">Click "Load Version History" to see every evaluator version used so far.</div>
+  </div>
+  <div id="mlopsCompareWrap" style="margin-bottom: 20px;"></div>
+  <div id="mlopsReportWrap">
+    <div class="empty">Click "Generate Report" for a combined snapshot: current version performance, drift status, and a comparison against the previous version.</div>
   </div>
 </div>
 
@@ -547,6 +576,145 @@ function renderPromptEvaluation(data) {
     html += `<div style="margin-top:14px; margin-bottom:6px; color:var(--muted); font-size:12px; text-transform:uppercase;">Suggested Rewrite</div>`;
     html += `<div class="rewrite-box">${escapeHtml(data.suggested_rewrite)}</div>`;
   }
+
+  wrap.innerHTML = html;
+}
+
+let lastLoadedVersions = [];
+
+async function loadMlopsVersions() {
+  const wrap = document.getElementById('mlopsVersionsWrap');
+  wrap.innerHTML = '<div class="empty">Loading version history…</div>';
+  try {
+    const versions = await fetchJSON('/api/v1/mlops/versions');
+    lastLoadedVersions = versions;
+
+    if (!versions.length) {
+      wrap.innerHTML = '<div class="empty">No evaluations recorded yet.</div>';
+      document.getElementById('mlopsCompareWrap').innerHTML = '';
+      return;
+    }
+
+    let html = '<table><thead><tr><th>Evaluator Version</th><th>Sample Size</th><th>Last Used</th></tr></thead><tbody>';
+    for (const v of versions) {
+      const lastUsed = v.last_used ? new Date(v.last_used).toLocaleString() : '—';
+      html += `<tr>
+        <td class="root-cause" style="word-break:break-all;">${escapeHtml(v.evaluator_version)}</td>
+        <td>${v.sample_size}</td>
+        <td class="root-cause">${lastUsed}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+
+    renderVersionCompareForm(versions);
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty">Could not load versions: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderVersionCompareForm(versions) {
+  const wrap = document.getElementById('mlopsCompareWrap');
+  if (versions.length < 2) {
+    wrap.innerHTML = '<div class="empty">Need at least 2 versions to run a comparison.</div>';
+    return;
+  }
+  const options = versions.map(v => `<option value="${escapeHtml(v.evaluator_version)}">${escapeHtml(v.evaluator_version)} (${v.sample_size})</option>`).join('');
+  wrap.innerHTML = `
+    <div style="color:var(--muted); font-size:12px; text-transform:uppercase; margin-bottom:6px;">Compare Two Versions</div>
+    <div class="version-select-row">
+      <select id="mlopsVersionA">${options}</select>
+      <span>vs</span>
+      <select id="mlopsVersionB">${options}</select>
+      <button onclick="runVersionComparison()">Compare</button>
+    </div>
+    <div id="mlopsComparisonResult" style="margin-top:12px;"></div>
+  `;
+  // default second select to a different version than the first, if possible
+  const selectB = document.getElementById('mlopsVersionB');
+  if (versions.length > 1) selectB.selectedIndex = 1;
+}
+
+async function runVersionComparison() {
+  const versionA = document.getElementById('mlopsVersionA').value;
+  const versionB = document.getElementById('mlopsVersionB').value;
+  const resultWrap = document.getElementById('mlopsComparisonResult');
+  resultWrap.innerHTML = '<div class="empty">Comparing…</div>';
+
+  try {
+    const params = new URLSearchParams({ version_a: versionA, version_b: versionB });
+    const data = await fetchJSON(`/api/v1/mlops/compare?${params}`);
+    renderVersionComparison(data, resultWrap);
+  } catch (err) {
+    resultWrap.innerHTML = `<div class="empty">Comparison failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderVersionCard(summary) {
+  return `<div class="mlops-version-card">
+    <div class="vname">${escapeHtml(summary.evaluator_version)}</div>
+    <div class="vrow"><span>Samples</span><span>${summary.sample_size}</span></div>
+    <div class="vrow"><span>Faithfulness</span><span>${summary.avg_faithfulness.toFixed(2)}</span></div>
+    <div class="vrow"><span>Hallucination Risk</span><span>${summary.avg_hallucination_risk.toFixed(2)}</span></div>
+    <div class="vrow"><span>Pass Rate</span><span>${(summary.pass_rate * 100).toFixed(1)}%</span></div>
+    <div class="vrow"><span>Avg Latency</span><span>${Math.round(summary.avg_latency_ms)} ms</span></div>
+  </div>`;
+}
+
+function renderVersionComparison(data, targetEl) {
+  const verdictClass = data.verdict.includes('WORSE') ? 'worse' : data.verdict.includes('improvement') ? 'improve' : 'neutral';
+  targetEl.innerHTML = `
+    <div class="mlops-compare-grid">
+      ${renderVersionCard(data.version_a)}
+      <div class="mlops-arrow">→</div>
+      ${renderVersionCard(data.version_b)}
+    </div>
+    <div class="mlops-verdict ${verdictClass}">${escapeHtml(data.verdict)}</div>
+  `;
+}
+
+async function loadMlopsReport() {
+  const wrap = document.getElementById('mlopsReportWrap');
+  wrap.innerHTML = '<div class="empty">Generating report…</div>';
+  try {
+    const report = await fetchJSON('/api/v1/mlops/report');
+    renderMlopsReport(report);
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty">Could not generate report: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderMlopsReport(report) {
+  const wrap = document.getElementById('mlopsReportWrap');
+
+  if (!report.current_version) {
+    wrap.innerHTML = `<div class="empty">${escapeHtml(report.suggested_action)}</div>`;
+    return;
+  }
+
+  const drift = report.drift;
+  const driftClass = drift.drift_detected ? 'alert' : 'ok';
+  const driftText = drift.sample_size_previous === 0
+    ? `Not enough historical data yet to detect drift (need a previous ${drift.recent_window_days}-day window).`
+    : drift.drift_detected
+      ? `⚠ Drift detected: faithfulness dropped ${(drift.drop_percentage * 100).toFixed(1)}%.`
+      : `No drift detected. Recent avg faithfulness: ${drift.recent_avg_faithfulness.toFixed(2)}.`;
+
+  let html = `<div class="drift-banner show ${driftClass}" style="position:static; margin-bottom:16px;">${driftText}</div>`;
+  html += `<div style="color:var(--muted); font-size:12px; text-transform:uppercase; margin-bottom:8px;">Current Version</div>`;
+  html += renderVersionCard(report.current_version_summary);
+
+  if (report.version_comparison) {
+    html += `<div style="color:var(--muted); font-size:12px; text-transform:uppercase; margin:16px 0 8px;">vs Previous Version</div>`;
+    const verdictClass = report.version_comparison.verdict.includes('WORSE') ? 'worse'
+      : report.version_comparison.verdict.includes('improvement') ? 'improve' : 'neutral';
+    html += `<div class="mlops-verdict ${verdictClass}">${escapeHtml(report.version_comparison.verdict)}</div>`;
+  }
+
+  html += `<div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
+    <div style="color:var(--muted); font-size:12px; text-transform:uppercase; margin-bottom:6px;">Suggested Action</div>
+    <div>${escapeHtml(report.suggested_action)}</div>
+  </div>`;
 
   wrap.innerHTML = html;
 }

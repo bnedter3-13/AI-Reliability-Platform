@@ -49,7 +49,7 @@ AVAILABLE_MODELS = [
     {"id": "gpt-4o", "label": "GPT-4o", "provider": "openai"},
     {"id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "provider": "gemini"},
     {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "provider": "gemini"},
-    {"id": "qwen/qwen-2.5-72b-instruct:free", "label": "Qwen 2.5 72B (free)", "provider": "qwen"},
+    {"id": "qwen/qwen-2.5-72b-instruct", "label": "Qwen 2.5 72B", "provider": "qwen"},
     {"id": "qwen/qwen-plus", "label": "Qwen Plus", "provider": "qwen"},
 ]
 PROVIDER_BY_MODEL = {m["id"]: m["provider"] for m in AVAILABLE_MODELS}
@@ -66,7 +66,7 @@ APPROX_PRICING_PER_MILLION_TOKENS = {
     "gpt-4o": {"input": 2.50, "output": 10.00},
     "gemini-3.6-flash": {"input": 1.50, "output": 7.50},
     "gemini-3.5-flash": {"input": 1.50, "output": 9.00},
-    "qwen/qwen-2.5-72b-instruct:free": {"input": 0.0, "output": 0.0},  # free tier, rate-limited
+    "qwen/qwen-2.5-72b-instruct": {"input": 0.36, "output": 0.40},  # per openrouter.ai/api/v1/models, Aug 2026
     "qwen/qwen-plus": {"input": 0.40, "output": 1.20},
 }
 
@@ -190,8 +190,9 @@ def _generate_with_qwen(model_id: str, question: str, contexts: List[str]) -> Tu
     # Qwen is accessed via OpenRouter (openrouter.ai), which exposes an
     # OpenAI-compatible API - reuse the `openai` SDK with a different base_url
     # instead of a separate provider SDK. Model IDs use OpenRouter's
-    # "qwen/<model-name>" format (e.g. "qwen/qwen-2.5-72b-instruct:free" for the
-    # free, rate-limited tier). Check openrouter.ai/models for the current list.
+    # "qwen/<model-name>" format (e.g. "qwen/qwen-2.5-72b-instruct"). Free-tier
+    # (":free") slugs come and go as OpenRouter adjusts availability - check
+    # openrouter.ai/models for the current list before relying on one.
     from openai import OpenAI
 
     client = OpenAI(api_key=settings.QWEN_API_KEY, base_url="https://openrouter.ai/api/v1")
@@ -203,9 +204,17 @@ def _generate_with_qwen(model_id: str, question: str, contexts: List[str]) -> Tu
             {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
             {"role": "user", "content": _build_generation_message(question, contexts)},
         ],
+        # Novita's routing for this model incorrectly rejects chat-format
+        # requests ("does not support endpoint: completions") even though the
+        # request is sent to /chat/completions - excluding it here so OpenRouter
+        # only falls back to providers that actually work for this model.
+        extra_body={"provider": {"ignore": ["Novita"]}},
     )
     latency_ms = (time.perf_counter() - start) * 1000
 
+    error = getattr(response, "error", None)
+    if error:
+        raise RuntimeError(f"OpenRouter error: {error.get('message', error)}")
     if not response.choices:
         raise RuntimeError("OpenRouter returned no choices - the model may be rate-limited or unavailable.")
 

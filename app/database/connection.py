@@ -35,16 +35,15 @@ def init_db() -> None:
 
 def _migrate_add_missing_columns() -> None:
     """
-    Lightweight auto-migration for SQLite dev databases: Base.metadata.create_all()
-    only creates tables that don't exist yet — it never alters an existing table's
-    schema. Since the team's local ai_reliability.db already has real evaluation
-    history predating the evaluator_version column, this adds any missing columns
-    in place via ALTER TABLE so that history isn't lost. No-op for non-SQLite
-    databases (e.g. PostgreSQL in production) — use a real migration tool there.
+    Lightweight auto-migration (works for both SQLite and PostgreSQL):
+    Base.metadata.create_all() only creates tables that don't exist yet — it never
+    alters an existing table's schema. Since the team's evaluations table may already
+    have real history predating a newly-added column (e.g. evaluator_version), this
+    adds any missing columns in place via ALTER TABLE so history isn't lost, on
+    whichever database DATABASE_URL points at. This is a simple additive-only
+    migration — for anything beyond "add a nullable column" (renames, type changes,
+    drops), use a real migration tool (e.g. Alembic) instead.
     """
-    if not settings.DATABASE_URL.startswith("sqlite"):
-        return
-
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
