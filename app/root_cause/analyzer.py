@@ -23,6 +23,7 @@ ROOT_CAUSES = {
     "hallucination": "The answer contains claims not supported by any retrieved context.",
     "unfaithful_answer": "The answer partially diverges from what the contexts state.",
     "low_correctness": "The answer does not adequately address the question, independent of sourcing.",
+    "evaluator_error": "The evaluator itself failed (API error, malformed judge response, etc.) — this is not a judgment of the answer's quality.",
     "unknown": "Could not confidently determine a specific root cause — needs manual review.",
 }
 
@@ -32,6 +33,7 @@ RECOMMENDATIONS = {
     "hallucination": "Tighten the generation prompt to explicitly forbid unsupported claims; consider lowering temperature.",
     "unfaithful_answer": "Review the prompt for ambiguous instructions; consider adding few-shot examples of faithful answers.",
     "low_correctness": "Review whether the question itself is answerable from the available knowledge base.",
+    "evaluator_error": "Re-run the evaluation - it wasn't actually scored. If it keeps failing, check API keys/quota and recent evaluator logs.",
     "unknown": "Flag this case for manual review by the team.",
 }
 
@@ -58,6 +60,14 @@ def analyze_root_cause(
             cause=cause,
             explanation="Evaluation passed — no root cause analysis needed.",
             recommendation="No action needed.",
+        )
+
+    if result.status == "error":
+        cause = "evaluator_error"
+        return RootCauseResult(
+            cause=cause,
+            explanation=ROOT_CAUSES[cause],
+            recommendation=RECOMMENDATIONS[cause],
         )
 
     if not contexts:

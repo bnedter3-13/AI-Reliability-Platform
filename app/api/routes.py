@@ -71,7 +71,7 @@ def create_health_check(payload: HealthCheckRequest, db: Session = Depends(get_d
     # Recommendation Engine upgrade (Component 4): try a Claude-generated,
     # case-specific recommendation; silently falls back to the static one on any error.
     final_recommendation = root_cause_result.recommendation
-    if root_cause_result.cause not in ("none", "unknown"):
+    if root_cause_result.cause not in ("none", "unknown", "evaluator_error"):
         try:
             final_recommendation = generate_smart_recommendation(
                 question=payload.question,

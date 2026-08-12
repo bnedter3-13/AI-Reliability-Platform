@@ -13,7 +13,33 @@ from typing import List
 # changes in a way that could affect scoring behavior (wording, criteria, format).
 # Combined with the model name in evaluator.py's EVALUATOR_VERSION, this lets the
 # platform compare evaluation quality/behavior across versions over time.
-JUDGE_PROMPT_VERSION = "1.0.0"
+JUDGE_PROMPT_VERSION = "1.1.0"
+
+# Tracks GENERATION_SYSTEM_PROMPT (app/comparison/model_comparator.py) instead of
+# JUDGE_SYSTEM_PROMPT above. Lives here rather than next to the prompt itself so
+# evaluator.py can import it without a circular import (model_comparator.py already
+# imports evaluate_answer from evaluator.py). Bump whenever the generation prompt's
+# wording changes in a way that could affect how faithfully models stay grounded in
+# context - independently of judge changes, so the two are separately trackable via
+# EVALUATOR_VERSION below. "1.1.0" reflects the current MUST/NOT-worded, explicit-
+# refusal-example version; version tracking starts here, so there is no "1.0.0" row
+# in the database under this scheme (earlier generation-prompt iterations, including
+# the one used for data/seed_scenarios_v2.json, predate this constant).
+GENERATION_PROMPT_VERSION = "1.1.0"
+
+# Tracks compare_models()'s code-level behavior (app/comparison/model_comparator.py) -
+# e.g. the retry-with-clarification mechanism - independently of GENERATION_PROMPT_VERSION
+# above, which only tracks GENERATION_SYSTEM_PROMPT's wording. A behavior change like
+# adding a retry doesn't touch that prompt's text, so it needs its own axis: otherwise
+# it would have to either piggyback on a GENERATION_PROMPT_VERSION bump (misleadingly
+# implying the prompt text changed, and mislabeling the non-comparison /health-checks
+# pipeline too, since EVALUATOR_VERSION below is applied globally) or go untracked.
+# Lives here rather than in model_comparator.py for the same circular-import reason as
+# GENERATION_PROMPT_VERSION: evaluator.py needs to import it to build EVALUATOR_VERSION,
+# and model_comparator.py already imports evaluate_answer from evaluator.py. "1.0.0"
+# marked the introduction of the retry-with-clarification mechanism; "1.1.0" marks
+# extending it to a second, more pointed retry when the first retry still fails.
+COMPARATOR_VERSION = "1.1.0"
 
 JUDGE_SYSTEM_PROMPT = """You are a strict evaluation engine for a Retrieval-Augmented \
 Generation (RAG) system. You will be given a QUESTION, the CONTEXTS that were retrieved for \
@@ -27,6 +53,14 @@ Score the answer on:
   in the real world.
 - hallucination_risk (0.0-1.0): how likely is the answer to contain fabricated information \
   not grounded in the contexts? (0 = no risk, 1 = certainly hallucinated)
+
+Special case - correct refusals: if the answer accurately states that it CANNOT answer the \
+question because the provided contexts are missing or don't contain the necessary \
+information (rather than guessing or falling back on outside knowledge), this is the \
+FAITHFUL, correct behavior, not a failure. Score it faithfulness_score >= 0.9, \
+hallucination_risk <= 0.1, and status "pass". Only score it lower if the refusal is \
+inaccurate (e.g. it claims no context was given when relevant context actually was), or if \
+it still sneaks in ungrounded claims alongside the refusal.
 
 Then assign an overall status: "pass" (faithfulness_score >= 0.7 and hallucination_risk <= \
 0.3), "warning" (borderline), or "fail" (clear hallucination or unfaithful answer).

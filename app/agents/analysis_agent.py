@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database.models import EvaluationRecord
-from app.evaluation.evaluator import _client  # reuse the same Claude client
+from app.evaluation.evaluator import _client, _first_text_block  # reuse the same Claude client
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,6 @@ def analyze_recent_patterns(db: Session, project_id: str = None, limit: int = 20
             "content": f"Here are the {len(records)} most recent evaluations, newest first:\n\n{batch_text}\n\nAnalyze this batch now.",
         }],
     )
-    raw = _extract_json(message.content[0].text)
+    raw = _extract_json(_first_text_block(message))
 
     return AnalysisReport(**raw, sample_size=len(records))

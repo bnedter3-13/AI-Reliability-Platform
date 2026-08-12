@@ -36,6 +36,7 @@ class ModelComparisonResultResponse(BaseModel):
     output_tokens: int
     estimated_cost_usd: float
     error: Optional[str] = None
+    explanation: Optional[str] = None
 
 
 class ModelComparisonResponse(BaseModel):

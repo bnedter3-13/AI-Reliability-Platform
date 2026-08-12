@@ -71,6 +71,9 @@
   .status-badge.pass { background: rgba(63,185,80,0.15); color: var(--pass); }
   .status-badge.warning { background: rgba(210,153,34,0.15); color: var(--warn); }
   .status-badge.fail { background: rgba(248,81,73,0.15); color: var(--fail); }
+  .cmp-retry-note { margin-top: 4px; font-size: 11px; font-weight: 600; }
+  .cmp-retry-note.pass { color: var(--pass); }
+  .cmp-retry-note.fail { color: var(--fail); }
   .root-cause { color: var(--muted); font-size: 12px; }
   .question-cell { max-width: 260px; }
   .empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
@@ -492,9 +495,13 @@ function renderComparisonResults(results) {
       </tr>`;
       continue;
     }
+    const retryMatch = r.explanation && r.explanation.match(/^(\[Corrected after 1 retry\]|\[Retry attempted, still failing\]|\[Retry attempted, evaluation failed\])/);
+    const retryNote = retryMatch
+      ? `<div class="cmp-retry-note ${retryMatch[1].startsWith('[Corrected') ? 'pass' : 'fail'}" title="${escapeHtml(r.explanation)}">${escapeHtml(retryMatch[1])}</div>`
+      : '';
     html += `<tr>
       <td>${escapeHtml(r.model_label)}<span class="provider-badge ${r.provider}">${r.provider}</span></td>
-      <td class="cmp-answer">${escapeHtml(r.answer)}</td>
+      <td class="cmp-answer" title="${escapeHtml(r.explanation || '')}">${escapeHtml(r.answer)}${retryNote}</td>
       <td>${r.status ? `<span class="status-badge ${statusClass(r.status)}">${r.status}</span>` : '—'}</td>
       <td>${r.faithfulness_score !== null ? r.faithfulness_score.toFixed(2) : '—'}</td>
       <td>${r.hallucination_risk !== null ? r.hallucination_risk.toFixed(2) : '—'}</td>

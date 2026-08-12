@@ -18,7 +18,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 
 from app.config import settings
-from app.evaluation.evaluator import _client
+from app.evaluation.evaluator import _client, _first_text_block
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def evaluate_prompt(prompt_text: str) -> PromptEvaluationResult:
             "content": f"PROMPT TO EVALUATE:\n\n{prompt_text}\n\nEvaluate this prompt now.",
         }],
     )
-    raw = _extract_json(message.content[0].text)
+    raw = _extract_json(_first_text_block(message))
     return PromptEvaluationResult(
         clarity_score=_coerce_score(raw.get("clarity_score")),
         completeness_score=_coerce_score(raw.get("completeness_score")),

@@ -32,7 +32,7 @@ from dataclasses import dataclass, asdict
 from typing import List, Optional, Callable, Tuple
 
 from app.config import settings
-from app.evaluation.evaluator import evaluate_answer
+from app.evaluation.evaluator import evaluate_answer, _first_text_block
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +71,51 @@ APPROX_PRICING_PER_MILLION_TOKENS = {
 }
 
 GENERATION_SYSTEM_PROMPT = (
-    "You are a helpful assistant. Answer the user's question using only the "
-    "information in the provided contexts, if any are given. Be concise."
+    "You are a strict, evidence-based assistant. You MUST answer the user's "
+    "question using ONLY information explicitly stated in the provided "
+    "contexts, if any are given. Never add facts, numbers, dates, or details "
+    "that are not stated there — even if they seem true, well-known, or "
+    "obviously correct. This rule has no exceptions.\n\n"
+    "If the contexts are missing, or don't contain enough information to "
+    "answer the question, you MUST say so explicitly and clearly (e.g. "
+    "'The provided context does not contain this information'). Do NOT "
+    "fall back on general knowledge, do NOT guess, and do NOT answer the "
+    "question anyway 'to be helpful.' A correct refusal is always better "
+    "than an unsupported answer.\n\n"
+    "If asked to verify a claim, check it strictly against the contexts "
+    "only — not against what sounds plausible or familiar.\n\n"
+    "Be concise. Stay directly and verifiably grounded in the contexts "
+    "provided at all times."
 )
+
+# Appended as a follow-up user turn when retrying generation after a judge
+# "fail" verdict (see compare_models' retry-with-clarification step below).
+RETRY_CORRECTIVE_MESSAGE = (
+    "Your previous answer may not have been strictly grounded in the provided "
+    "context. Please review it: confirm every claim is explicitly supported by "
+    "the context, or clearly state if the context is insufficient to answer."
+)
+
+# Appended as a follow-up user turn for the *second* retry, i.e. when the first
+# retry's answer still evaluates to "fail". More pointed than
+# RETRY_CORRECTIVE_MESSAGE above: it asks the model to check each specific claim
+# individually rather than repeating the same general grounding review that
+# already failed to fix the answer once.
+RETRY_CORRECTIVE_MESSAGE_2 = (
+    "Your answer may still contain a specific detail (a number, name, date, or "
+    "fact) that is not literally present in the provided context. Re-check each "
+    "specific claim individually against the context word-by-word, and remove or "
+    "flag anything you cannot directly verify there."
+)
+
+# MLOps Integration (Component 10): the version identifier for this module's
+# code-level behavior (currently: the retry-with-clarification mechanism below)
+# lives in app.evaluation.prompts as COMPARATOR_VERSION, not here - same reason
+# GENERATION_PROMPT_VERSION lives there instead of in this file (see that
+# constant's comment): evaluator.py needs to import it into EVALUATOR_VERSION,
+# and this module already imports evaluate_answer from evaluator.py, so defining
+# it here would create a circular import. Bump it whenever compare_models()'s
+# behavior changes at the code level, independent of prompt wording changes.
 
 
 @dataclass
@@ -91,6 +133,7 @@ class ModelComparisonResult:
     output_tokens: int
     estimated_cost_usd: float
     error: Optional[str] = None
+    explanation: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -116,42 +159,62 @@ def _estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> floa
 # Each returns (answer_text, latency_ms, input_tokens, output_tokens).
 # Clients are created lazily inside each function (not at import time) so a
 # missing API key for provider B doesn't block using provider A at all.
+#
+# `previous_answer`, when set, means this is the retry-with-clarification call
+# (see compare_models): the model's own prior answer plus RETRY_CORRECTIVE_MESSAGE
+# are appended as a follow-up turn instead of sending the question fresh.
 # ---------------------------------------------------------------------------
 
-def _generate_with_anthropic(model_id: str, question: str, contexts: List[str]) -> Tuple[str, float, int, int]:
+def _generate_with_anthropic(
+    model_id: str, question: str, contexts: List[str], previous_answer: Optional[str] = None,
+    corrective_message: str = RETRY_CORRECTIVE_MESSAGE,
+) -> Tuple[str, float, int, int]:
     if not settings.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
     import anthropic
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    messages = [{"role": "user", "content": _build_generation_message(question, contexts)}]
+    if previous_answer is not None:
+        messages.append({"role": "assistant", "content": previous_answer})
+        messages.append({"role": "user", "content": corrective_message})
+
     start = time.perf_counter()
     message = client.messages.create(
         model=model_id,
         max_tokens=400,
         system=GENERATION_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": _build_generation_message(question, contexts)}],
+        messages=messages,
     )
     latency_ms = (time.perf_counter() - start) * 1000
-    answer_text = message.content[0].text
+    answer_text = _first_text_block(message)
     input_tokens = getattr(message.usage, "input_tokens", 0)
     output_tokens = getattr(message.usage, "output_tokens", 0)
     return answer_text, latency_ms, input_tokens, output_tokens
 
 
-def _generate_with_openai(model_id: str, question: str, contexts: List[str]) -> Tuple[str, float, int, int]:
+def _generate_with_openai(
+    model_id: str, question: str, contexts: List[str], previous_answer: Optional[str] = None,
+    corrective_message: str = RETRY_CORRECTIVE_MESSAGE,
+) -> Tuple[str, float, int, int]:
     if not settings.OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
     from openai import OpenAI
 
     client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    messages = [
+        {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+        {"role": "user", "content": _build_generation_message(question, contexts)},
+    ]
+    if previous_answer is not None:
+        messages.append({"role": "assistant", "content": previous_answer})
+        messages.append({"role": "user", "content": corrective_message})
+
     start = time.perf_counter()
     response = client.chat.completions.create(
         model=model_id,
         max_tokens=400,
-        messages=[
-            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-            {"role": "user", "content": _build_generation_message(question, contexts)},
-        ],
+        messages=messages,
     )
     latency_ms = (time.perf_counter() - start) * 1000
     answer_text = response.choices[0].message.content
@@ -160,7 +223,10 @@ def _generate_with_openai(model_id: str, question: str, contexts: List[str]) -> 
     return answer_text, latency_ms, input_tokens, output_tokens
 
 
-def _generate_with_gemini(model_id: str, question: str, contexts: List[str]) -> Tuple[str, float, int, int]:
+def _generate_with_gemini(
+    model_id: str, question: str, contexts: List[str], previous_answer: Optional[str] = None,
+    corrective_message: str = RETRY_CORRECTIVE_MESSAGE,
+) -> Tuple[str, float, int, int]:
     if not settings.GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured.")
     # Uses the current `google-genai` SDK (pip install google-genai). The older
@@ -169,10 +235,19 @@ def _generate_with_gemini(model_id: str, question: str, contexts: List[str]) -> 
 
     client = google_genai.Client(api_key=settings.GEMINI_API_KEY)
 
+    if previous_answer is not None:
+        contents = [
+            {"role": "user", "parts": [{"text": _build_generation_message(question, contexts)}]},
+            {"role": "model", "parts": [{"text": previous_answer}]},
+            {"role": "user", "parts": [{"text": corrective_message}]},
+        ]
+    else:
+        contents = _build_generation_message(question, contexts)
+
     start = time.perf_counter()
     response = client.models.generate_content(
         model=model_id,
-        contents=_build_generation_message(question, contexts),
+        contents=contents,
         config={"system_instruction": GENERATION_SYSTEM_PROMPT},
     )
     latency_ms = (time.perf_counter() - start) * 1000
@@ -184,7 +259,10 @@ def _generate_with_gemini(model_id: str, question: str, contexts: List[str]) -> 
     return answer_text, latency_ms, input_tokens, output_tokens
 
 
-def _generate_with_qwen(model_id: str, question: str, contexts: List[str]) -> Tuple[str, float, int, int]:
+def _generate_with_qwen(
+    model_id: str, question: str, contexts: List[str], previous_answer: Optional[str] = None,
+    corrective_message: str = RETRY_CORRECTIVE_MESSAGE,
+) -> Tuple[str, float, int, int]:
     if not settings.QWEN_API_KEY:
         raise RuntimeError("QWEN_API_KEY is not configured (expects an OpenRouter API key).")
     # Qwen is accessed via OpenRouter (openrouter.ai), which exposes an
@@ -196,14 +274,19 @@ def _generate_with_qwen(model_id: str, question: str, contexts: List[str]) -> Tu
     from openai import OpenAI
 
     client = OpenAI(api_key=settings.QWEN_API_KEY, base_url="https://openrouter.ai/api/v1")
+    messages = [
+        {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+        {"role": "user", "content": _build_generation_message(question, contexts)},
+    ]
+    if previous_answer is not None:
+        messages.append({"role": "assistant", "content": previous_answer})
+        messages.append({"role": "user", "content": corrective_message})
+
     start = time.perf_counter()
     response = client.chat.completions.create(
         model=model_id,
         max_tokens=400,
-        messages=[
-            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-            {"role": "user", "content": _build_generation_message(question, contexts)},
-        ],
+        messages=messages,
         # Novita's routing for this model incorrectly rejects chat-format
         # requests ("does not support endpoint: completions") even though the
         # request is sent to /chat/completions - excluding it here so OpenRouter
@@ -232,12 +315,31 @@ PROVIDER_GENERATORS: dict = {
 }
 
 
-def _generate_answer(model_id: str, question: str, contexts: List[str]) -> Tuple[str, float, int, int]:
+def _generate_answer(
+    model_id: str, question: str, contexts: List[str], previous_answer: Optional[str] = None,
+    corrective_message: str = RETRY_CORRECTIVE_MESSAGE,
+) -> Tuple[str, float, int, int]:
     provider = PROVIDER_BY_MODEL.get(model_id)
     if not provider:
         raise ValueError(f"Unknown model_id: {model_id!r}. Add it to AVAILABLE_MODELS first.")
     generator: Callable = PROVIDER_GENERATORS[provider]
-    return generator(model_id, question, contexts)
+    return generator(model_id, question, contexts, previous_answer, corrective_message)
+
+
+def _safe_evaluate(
+    model_id: str, answer: str, contexts: List[str],
+    reference_answer: Optional[str], question: str,
+):
+    """evaluate_answer(), but logs and returns None instead of raising - callers
+    treat None the same as the pre-existing "judge evaluation failed" case."""
+    try:
+        return evaluate_answer(
+            answer=answer, contexts=contexts,
+            reference_answer=reference_answer, question=question,
+        )
+    except Exception as exc:
+        logger.warning("Model Comparison: judge evaluation failed for %s: %s", model_id, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +358,16 @@ def compare_models(
     quality scores stay comparable across providers, and return one result per
     model. A model that fails (missing key, API error) shows up with its `error`
     field set rather than stopping the others.
+
+    A judge "fail" verdict triggers a retry-with-clarification: the model is
+    re-prompted with its own prior answer plus a corrective follow-up, and the
+    retried answer is re-evaluated. If that still fails, one further retry is
+    made with a more pointed, claim-by-claim corrective message. Whichever
+    attempt is the last one made (up to three generation calls total) has its
+    answer/scores/status replace all earlier attempts entirely - see
+    `explanation` for how many retries were needed, if any. `generation_latency_ms`,
+    `input_tokens`, `output_tokens`, and `estimated_cost_usd` always reflect the
+    sum of every attempt actually made.
     """
     contexts = contexts or []
     models_to_run = model_ids or [m["id"] for m in AVAILABLE_MODELS]
@@ -280,19 +392,100 @@ def compare_models(
             ))
             continue
 
-        try:
-            eval_result = evaluate_answer(
-                answer=answer_text, contexts=contexts,
-                reference_answer=reference_answer, question=question,
-            )
+        eval_result = _safe_evaluate(model_id, answer_text, contexts, reference_answer, question)
+        if eval_result is not None:
             correctness = eval_result.correctness_score
             faithfulness = eval_result.faithfulness_score
             hallucination = eval_result.hallucination_risk
             status = eval_result.status
-        except Exception as exc:
-            logger.warning("Model Comparison: judge evaluation failed for %s: %s", model_id, exc)
-            correctness = faithfulness = hallucination = None
-            status = None
+            explanation = eval_result.explanation
+        else:
+            correctness = faithfulness = hallucination = status = explanation = None
+
+        # Retry-with-clarification: a judge "fail" verdict (not "error" - that's an
+        # evaluator failure, not a real verdict) gets up to two retries. The first
+        # retry uses the model's own prior answer plus a general grounding-review
+        # corrective message; if that still fails, a second retry uses a more
+        # pointed, claim-by-claim corrective message instead. Whichever retry is
+        # the last one made has its answer/scores/status *replace* every earlier
+        # attempt entirely; latency, token, and cost fields accumulate every
+        # attempt actually made either way.
+        if status == "fail":
+            try:
+                retry_answer, retry_latency_ms, retry_input_tokens, retry_output_tokens = _generate_answer(
+                    model_id, question, contexts, previous_answer=answer_text,
+                )
+            except Exception as exc:
+                logger.error("Model Comparison: retry generation failed for %s: %s", model_id, exc)
+            else:
+                gen_latency_ms += retry_latency_ms
+                input_tokens += retry_input_tokens
+                output_tokens += retry_output_tokens
+                answer_text = retry_answer
+
+                retry_eval = _safe_evaluate(model_id, retry_answer, contexts, reference_answer, question)
+                if retry_eval is not None:
+                    correctness = retry_eval.correctness_score
+                    faithfulness = retry_eval.faithfulness_score
+                    hallucination = retry_eval.hallucination_risk
+                    status = retry_eval.status
+
+                    if status == "fail":
+                        try:
+                            (
+                                retry2_answer, retry2_latency_ms,
+                                retry2_input_tokens, retry2_output_tokens,
+                            ) = _generate_answer(
+                                model_id, question, contexts, previous_answer=retry_answer,
+                                corrective_message=RETRY_CORRECTIVE_MESSAGE_2,
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "Model Comparison: second retry generation failed for %s: %s", model_id, exc
+                            )
+                            explanation = f"[Retry attempted twice, still failing] {retry_eval.explanation}"
+                        else:
+                            gen_latency_ms += retry2_latency_ms
+                            input_tokens += retry2_input_tokens
+                            output_tokens += retry2_output_tokens
+                            answer_text = retry2_answer
+
+                            retry2_eval = _safe_evaluate(
+                                model_id, retry2_answer, contexts, reference_answer, question
+                            )
+                            if retry2_eval is not None:
+                                correctness = retry2_eval.correctness_score
+                                faithfulness = retry2_eval.faithfulness_score
+                                hallucination = retry2_eval.hallucination_risk
+                                status = retry2_eval.status
+                                if status == "fail":
+                                    explanation = f"[Retry attempted twice, still failing] {retry2_eval.explanation}"
+                                elif status == "error":
+                                    explanation = retry2_eval.explanation
+                                else:
+                                    explanation = f"[Corrected after 2 retries] {retry2_eval.explanation}"
+                            else:
+                                correctness = faithfulness = hallucination = status = None
+                                explanation = (
+                                    "[Retry attempted, evaluation failed] Could not re-score the "
+                                    "retried answer - see server logs."
+                                )
+                    elif status == "error":
+                        # Evaluator itself failed on the retry - not a real verdict,
+                        # so no retry-outcome prefix is warranted.
+                        explanation = retry_eval.explanation
+                    else:
+                        explanation = f"[Corrected after 1 retry] {retry_eval.explanation}"
+                else:
+                    # Retry generation succeeded (retry_answer/answer_text above are
+                    # already updated) but re-evaluating it crashed. Don't blank that
+                    # away silently - a retry genuinely happened, so say so, even
+                    # though we have no scores to show for it.
+                    correctness = faithfulness = hallucination = status = None
+                    explanation = (
+                        "[Retry attempted, evaluation failed] Could not re-score the "
+                        "retried answer - see server logs."
+                    )
 
         results.append(ModelComparisonResult(
             model_id=model_id,
@@ -307,6 +500,7 @@ def compare_models(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             estimated_cost_usd=_estimate_cost(model_id, input_tokens, output_tokens),
+            explanation=explanation,
         ))
 
     return results

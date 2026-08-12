@@ -17,7 +17,7 @@ import logging
 from typing import Optional
 
 from app.config import settings
-from app.evaluation.evaluator import _client
+from app.evaluation.evaluator import _client, _first_text_block
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def generate_smart_recommendation(
                 ),
             }],
         )
-        text = message.content[0].text
+        text = _first_text_block(message)
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise ValueError("No JSON object in response")

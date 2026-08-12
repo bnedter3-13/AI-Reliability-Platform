@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
-from app.evaluation.evaluator import _client, _extract_json  # reuse the same Claude client
+from app.evaluation.evaluator import _client, _extract_json, _first_text_block  # reuse the same Claude client
 from app.evaluation.prompts import (
     CONTEXT_RELEVANCE_SYSTEM_PROMPT, build_context_relevance_message,
     CONTEXT_PRECISION_SYSTEM_PROMPT, build_context_precision_message,
@@ -50,7 +50,7 @@ def evaluate_context_relevance(question: str, contexts: List[str]) -> List[Conte
                     "content": build_context_relevance_message(question, context),
                 }],
             )
-            raw = _extract_json(message.content[0].text)
+            raw = _extract_json(_first_text_block(message))
             results.append(ContextRelevanceResult(
                 context=context,
                 relevance_score=raw["relevance_score"],
@@ -100,7 +100,7 @@ def evaluate_context_precision(
                     "content": build_context_precision_message(question, reference_answer, context),
                 }],
             )
-            raw = _extract_json(message.content[0].text)
+            raw = _extract_json(_first_text_block(message))
             results.append(ContextPrecisionResult(
                 context=context,
                 is_useful=raw["is_useful"],
@@ -151,7 +151,7 @@ def evaluate_context_recall(
                 "content": build_context_recall_message(question, reference_answer, contexts),
             }],
         )
-        raw = _extract_json(message.content[0].text)
+        raw = _extract_json(_first_text_block(message))
         return ContextRecallResult(
             recall_score=raw["recall_score"],
             covered_claims=raw["covered_claims"],
