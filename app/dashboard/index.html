@@ -264,6 +264,43 @@
   </div>
 </div>
 
+<div class="panel" style="margin-top: 20px;">
+  <h2>Knowledge Base</h2>
+  <div class="cmp-form">
+    <div>
+      <label for="kbUploadProjectId">Project ID</label>
+      <input type="text" id="kbUploadProjectId" placeholder="e.g. support-bot" />
+    </div>
+    <div>
+      <label for="kbUploadFile">PDF document</label>
+      <input type="file" id="kbUploadFile" accept="application/pdf" />
+    </div>
+    <div>
+      <button onclick="uploadKnowledgeBaseDocument()">Upload &amp; Index</button>
+    </div>
+  </div>
+  <div id="kbUploadResultsWrap" style="margin-bottom: 20px;">
+    <div class="empty">Pick a project ID and a PDF, then click "Upload &amp; Index".</div>
+  </div>
+
+  <div class="cmp-form">
+    <div>
+      <label for="kbVerifyProjectId">Project ID</label>
+      <input type="text" id="kbVerifyProjectId" placeholder="e.g. support-bot" />
+    </div>
+    <div>
+      <label for="kbVerifyQuestion">Question</label>
+      <input type="text" id="kbVerifyQuestion" placeholder="e.g. What is the refund policy?" />
+    </div>
+    <div>
+      <button onclick="verifyKnowledgeBaseQuestion()">Verify</button>
+    </div>
+  </div>
+  <div id="kbVerifyResultsWrap">
+    <div class="empty">Enter a project ID and question, then click "Verify".</div>
+  </div>
+</div>
+
 <script>
 const API_BASE = window.location.origin;
 
@@ -724,6 +761,93 @@ function renderMlopsReport(report) {
   </div>`;
 
   wrap.innerHTML = html;
+}
+
+async function uploadKnowledgeBaseDocument() {
+  const projectId = document.getElementById('kbUploadProjectId').value.trim();
+  const fileInput = document.getElementById('kbUploadFile');
+  const file = fileInput.files[0];
+  const wrap = document.getElementById('kbUploadResultsWrap');
+
+  if (!projectId) {
+    wrap.innerHTML = '<div class="empty">Enter a project ID first.</div>';
+    return;
+  }
+  if (!file) {
+    wrap.innerHTML = '<div class="empty">Choose a PDF file first.</div>';
+    return;
+  }
+
+  wrap.innerHTML = '<div class="empty">Uploading and indexing…</div>';
+
+  try {
+    const formData = new FormData();
+    formData.append('project_id', projectId);
+    formData.append('file', file);
+
+    const res = await fetch(API_BASE + '/api/v1/knowledge-base/upload', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    wrap.innerHTML = `
+      <table style="margin-bottom:0;">
+        <tr><th style="width:180px;">Filename</th><td>${escapeHtml(data.filename || '—')}</td></tr>
+        <tr><th>Doc ID</th><td style="word-break:break-all;">${escapeHtml(data.doc_id)}</td></tr>
+        <tr><th>Chunks stored</th><td>${data.num_chunks}</td></tr>
+      </table>
+    `;
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty">Upload failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function verifyKnowledgeBaseQuestion() {
+  const projectId = document.getElementById('kbVerifyProjectId').value.trim();
+  const question = document.getElementById('kbVerifyQuestion').value.trim();
+  const wrap = document.getElementById('kbVerifyResultsWrap');
+
+  if (!projectId) {
+    wrap.innerHTML = '<div class="empty">Enter a project ID first.</div>';
+    return;
+  }
+  if (!question) {
+    wrap.innerHTML = '<div class="empty">Enter a question first.</div>';
+    return;
+  }
+
+  wrap.innerHTML = '<div class="empty">Checking knowledge base…</div>';
+
+  try {
+    const res = await fetch(API_BASE + '/api/v1/knowledge-base/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, question }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const badgeClass = data.supported ? 'pass' : 'fail';
+    const matchesHtml = data.matched_chunks.length
+      ? '<ul class="issue-list">' + data.matched_chunks.map(c => `<li>${escapeHtml(c)}</li>`).join('') + '</ul>'
+      : '<div class="empty">No matching chunks found.</div>';
+    wrap.innerHTML = `
+      <div style="margin-bottom:12px;">
+        <span class="status-badge ${badgeClass}">${data.supported ? 'Supported' : 'Not Supported'}</span>
+        <span class="root-cause" style="margin-left:10px;">relevance ${data.best_relevance_score.toFixed(3)} (threshold ${data.threshold})</span>
+      </div>
+      <div style="color:var(--muted); font-size:12px; text-transform:uppercase; margin-bottom:6px;">Matched Chunks</div>
+      ${matchesHtml}
+    `;
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty">Verification failed: ${escapeHtml(err.message)}</div>`;
+  }
 }
 
 async function loadAll() {

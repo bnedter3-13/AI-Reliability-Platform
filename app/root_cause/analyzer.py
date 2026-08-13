@@ -15,9 +15,11 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from app.evaluation.evaluator import EvaluationResult
+from app.knowledge_base.verification_agent import VerificationResult
 
 
 ROOT_CAUSES = {
+    "verified_knowledge_gap": "The Retrieval Verification Agent independently confirmed this question isn't supported by the indexed knowledge base at all — not just a retrieval-quality problem in this particular RAG run.",
     "no_context": "No relevant context was retrieved for this question.",
     "poor_retrieval": "Contexts were retrieved but appear weakly related to the question.",
     "hallucination": "The answer contains claims not supported by any retrieved context.",
@@ -28,6 +30,7 @@ ROOT_CAUSES = {
 }
 
 RECOMMENDATIONS = {
+    "verified_knowledge_gap": "Add source documents that cover this topic to the knowledge base — this is a coverage gap, not a retrieval tuning problem.",
     "no_context": "Check the retrieval step: is the vector database populated and the query embedding correct?",
     "poor_retrieval": "Try increasing Top-K, adjusting chunk size, or switching the embedding model.",
     "hallucination": "Tighten the generation prompt to explicitly forbid unsupported claims; consider lowering temperature.",
@@ -49,10 +52,18 @@ def analyze_root_cause(
     result: EvaluationResult,
     contexts: List[str],
     context_relevance_avg: Optional[float] = None,
+    verification_result: Optional[VerificationResult] = None,
 ) -> RootCauseResult:
     """
     Classify the likely root cause of a failed/borderline evaluation using simple,
     explainable rules over the evaluation signals we already have.
+
+    `verification_result` is optional and comes from the Retrieval Verification
+    Agent (Component 11) independently checking the question against the indexed
+    knowledge base — not from what this particular RAG run claims it retrieved.
+    When present and it found no support, that's checked first: it's a stronger,
+    independently-verified signal than the other rules below, which only reason
+    about this one run's own contexts/scores.
     """
     if result.status == "pass":
         cause = "none"
@@ -70,7 +81,9 @@ def analyze_root_cause(
             recommendation=RECOMMENDATIONS[cause],
         )
 
-    if not contexts:
+    if verification_result is not None and not verification_result.supported:
+        cause = "verified_knowledge_gap"
+    elif not contexts:
         cause = "no_context"
     elif context_relevance_avg is not None and context_relevance_avg < 0.4:
         cause = "poor_retrieval"

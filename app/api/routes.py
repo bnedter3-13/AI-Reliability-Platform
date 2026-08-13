@@ -5,9 +5,11 @@ All API endpoints, kept in one router and included from main.py.
 """
 
 import logging
+import os
+import tempfile
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -25,6 +27,13 @@ from app.schemas.model_comparison import ModelComparisonRequest, ModelComparison
 from app.evaluation.prompt_evaluator import evaluate_prompt
 from app.schemas.prompt_evaluation import PromptEvaluationRequest, PromptEvaluationResponse
 from app.mlops.version_tracker import list_versions, compare_versions, generate_periodic_report
+from app.knowledge_base.indexing_service import index_pdf
+from app.knowledge_base.verification_agent import verify_question
+from app.schemas.knowledge_base import (
+    KnowledgeBaseUploadResponse,
+    KnowledgeBaseVerifyRequest,
+    KnowledgeBaseVerifyResponse,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -246,3 +255,47 @@ def get_periodic_report(project_id: Optional[str] = None, db: Session = Depends(
     the previous version, with a suggested next action.
     """
     return generate_periodic_report(db, project_id=project_id)
+
+
+@router.post("/knowledge-base/upload", response_model=KnowledgeBaseUploadResponse)
+async def upload_knowledge_base_document(project_id: str = Form(...), file: UploadFile = File(...)):
+    """
+    Knowledge Base + Retrieval Verification Agent (Component 11): ingest a PDF into
+    a project's knowledge base — extracts text, chunks it, embeds the chunks, and
+    stores them in the local Chroma vector store.
+    """
+    suffix = os.path.splitext(file.filename or "")[1] or ".pdf"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    try:
+        result = index_pdf(project_id=project_id, file_path=tmp_path, original_filename=file.filename)
+    finally:
+        os.remove(tmp_path)
+
+    return KnowledgeBaseUploadResponse(
+        project_id=result.project_id,
+        doc_id=result.doc_id,
+        filename=result.filename,
+        num_chunks=result.num_chunks,
+    )
+
+
+@router.post("/knowledge-base/verify", response_model=KnowledgeBaseVerifyResponse)
+def verify_knowledge_base_question(payload: KnowledgeBaseVerifyRequest):
+    """
+    Knowledge Base + Retrieval Verification Agent (Component 11): independently
+    checks whether `question` is actually supported by the project's indexed
+    documents — separate from whatever a RAG app under test claims it retrieved.
+    """
+    result = verify_question(
+        project_id=payload.project_id, question=payload.question, n_results=payload.n_results
+    )
+    return KnowledgeBaseVerifyResponse(
+        question=result.question,
+        supported=result.supported,
+        best_relevance_score=result.best_relevance_score,
+        threshold=result.threshold,
+        matched_chunks=result.matched_chunks,
+    )

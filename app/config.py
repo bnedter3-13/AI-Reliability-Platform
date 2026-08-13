@@ -20,5 +20,9 @@ class Settings:
     DRIFT_ALERT_THRESHOLD: float = float(os.environ.get("DRIFT_ALERT_THRESHOLD", "0.15"))
     MODEL_NAME: str = "claude-sonnet-5"
 
+    # Knowledge Base + Retrieval Verification Agent (Component 11): where the local
+    # Chroma vector store persists its data on disk.
+    CHROMA_PERSIST_DIR: str = os.environ.get("CHROMA_PERSIST_DIR", "./data/chroma_db")
+
 
 settings = Settings()

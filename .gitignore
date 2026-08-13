@@ -25,6 +25,9 @@ env/
 *.db
 *.sqlite3
 
+# Knowledge Base vector store (Component 11)
+data/chroma_db/
+
 # IDE
 .vscode/
 .idea/
