@@ -12,7 +12,10 @@ from typing import List, Optional
 
 from app.knowledge_base.vector_store import KnowledgeBaseStore
 
-RELEVANCE_THRESHOLD = 0.8
+# 0.65, not 0.8: chunks mix numeric data (tables, figures) with surrounding prose,
+# which dilutes embedding relevance even when the chunk clearly answers the question.
+# Real supported questions were observed scoring 0.59-0.68 against 0.8.
+RELEVANCE_THRESHOLD = 0.65
 
 
 @dataclass

@@ -15,7 +15,7 @@ AI system: send it a question/answer/context triple and it scores correctness an
 faithfulness, classifies *why* a bad answer failed, suggests a fix, and rolls all of that up
 into dashboards for monitoring, drift detection, and cross-model/cross-version comparison.
 
-All 10 components below are fully implemented — not stubs — and are wired together through
+All 11 components below are fully implemented — not stubs — and are wired together through
 one FastAPI app (`app/main.py`) and one router (`app/api/routes.py`).
 
 ---
@@ -33,6 +33,7 @@ one FastAPI app (`app/main.py`) and one router (`app/api/routes.py`).
   8. [Model Comparison](#8-model-comparison)
   9. [RAG Evaluation](#9-rag-evaluation)
   10. [MLOps Integration](#10-mlops-integration)
+  11. [Knowledge Base + Retrieval Verification Agent](#11-knowledge-base--retrieval-verification-agent)
 - [Project Structure](#project-structure)
 - [Setup](#setup)
   - [Local Quick Start (SQLite)](#local-quick-start-sqlite)
@@ -312,6 +313,58 @@ curl "http://127.0.0.1:8000/api/v1/mlops/report?project_id=support-bot"
 
 ---
 
+### 11. Knowledge Base + Retrieval Verification Agent
+
+**What it does:** Independently checks whether a question is actually supported by a
+project's indexed source documents — separate from, and a check on, whatever a RAG app
+under test claims it retrieved. A PDF is uploaded and run through an ingest pipeline
+(extract text → chunk → embed → store) into a local Chroma vector store, one collection
+per `project_id`. A question is then verified by embedding it, querying that collection for
+the best-matching chunk, and comparing its relevance (`1 - cosine distance`) against
+`RELEVANCE_THRESHOLD` (0.65 — chunking mixes numeric data with prose, which dilutes
+embedding relevance even for chunks that clearly answer the question, so a stricter
+threshold produced false negatives on real documents). Uses Chroma's bundled local
+embedding model (ONNX MiniLM-L6-v2), so no external embedding API/key is required.
+Implemented across
+[`app/knowledge_base/document_loader.py`](app/knowledge_base/document_loader.py) (PDF text
+extraction via PyMuPDF),
+[`app/knowledge_base/chunker.py`](app/knowledge_base/chunker.py) (fixed-size overlapping
+chunking),
+[`app/knowledge_base/vector_store.py`](app/knowledge_base/vector_store.py) (`KnowledgeBaseStore`,
+the Chroma wrapper),
+[`app/knowledge_base/indexing_service.py`](app/knowledge_base/indexing_service.py)
+(`index_pdf()`, the full ingest pipeline), and
+[`app/knowledge_base/verification_agent.py`](app/knowledge_base/verification_agent.py)
+(`verify_question()`).
+
+**Usage — API:**
+
+```bash
+# Upload and index a PDF into a project's knowledge base
+curl -X POST http://127.0.0.1:8000/api/v1/knowledge-base/upload \
+  -F "project_id=support-bot" \
+  -F "file=@policy.pdf"
+
+# Verify whether a question is actually supported by that knowledge base
+curl -X POST http://127.0.0.1:8000/api/v1/knowledge-base/verify \
+  -H "Content-Type: application/json" \
+  -d '{"project_id": "support-bot", "question": "What is our refund policy?"}'
+```
+
+**Usage — Python:**
+
+```python
+from app.knowledge_base.indexing_service import index_pdf
+from app.knowledge_base.verification_agent import verify_question
+
+index_pdf(project_id="support-bot", file_path="policy.pdf", original_filename="policy.pdf")
+
+result = verify_question(project_id="support-bot", question="What is our refund policy?")
+print(result.supported, result.best_relevance_score, result.matched_chunks)
+```
+
+---
+
 ### Other useful endpoints
 
 | Method | Path | Purpose |
@@ -351,6 +404,12 @@ app/
 │   └── model_comparator.py         # (8) Model Comparison — compare_models()
 ├── mlops/
 │   └── version_tracker.py          # (10) MLOps Integration — versions/compare/report
+├── knowledge_base/
+│   ├── document_loader.py          # (11) PDF text extraction (PyMuPDF)
+│   ├── chunker.py                  # (11) Fixed-size overlapping text chunking
+│   ├── vector_store.py             # (11) KnowledgeBaseStore — Chroma wrapper
+│   ├── indexing_service.py         # (11) index_pdf() — full ingest pipeline
+│   └── verification_agent.py       # (11) verify_question() — retrieval verification
 ├── database/
 │   ├── models.py                   # SQLAlchemy models (EvaluationRecord)
 │   └── connection.py               # Engine/session setup + lightweight auto-migration
@@ -365,7 +424,20 @@ tests/
 ├── test_version_tracker.py
 ├── test_rag_evaluator.py
 ├── test_prompt_evaluator.py
-└── test_analysis_agent.py
+├── test_analysis_agent.py
+├── test_chunker.py
+├── test_vector_store.py
+└── test_verification_agent.py
+scripts/
+├── index_pdf_demo.py               # (11) Manual-test script: generates + indexes a sample PDF
+├── seed_scenarios.py               # Seeds data/seed_scenarios.json (evaluator v1.0.0 baseline)
+├── seed_scenarios_v2.py            # Seeds data/seed_scenarios_v2.json (judge prompt v1.1.0)
+├── seed_scenarios_v3.py            # Seeds data/seed_scenarios_v3.json (generation prompt hardening)
+├── seed_scenarios_v4.py            # Seeds data/seed_scenarios_v4.json (retry-with-clarification)
+└── seed_scenarios_v5.py            # Seeds data/seed_scenarios_v5.json (ThinkingBlock fix + 2nd retry)
+data/
+├── seed_scenarios*.json            # Seed data consumed by scripts/seed_scenarios*.py
+└── chroma_db/                      # Local Chroma vector store (gitignored, created at runtime)
 notebooks/
 └── evaluator_prototype.ipynb       # Exploratory notebook
 ```
@@ -451,6 +523,7 @@ All variables are read once at startup into `settings` (see
 | `QWEN_API_KEY` | Optional | — | Model Comparison (8) — an **OpenRouter** API key (openrouter.ai), enables Qwen models via OpenRouter's OpenAI-compatible API. |
 | `DATABASE_URL` | Optional | `sqlite:///./ai_reliability.db` | All persistence — set to a `postgresql://...` URL for production (see above). |
 | `DRIFT_ALERT_THRESHOLD` | Optional | `0.15` | Drift Detection (6) — fraction drop in average faithfulness that triggers `drift_detected: true`. |
+| `CHROMA_PERSIST_DIR` | Optional | `./data/chroma_db` | Knowledge Base + Retrieval Verification Agent (11) — where the local Chroma vector store persists on disk. |
 
 A model with no matching API key configured simply fails for that one provider (with its
 `error` field set) in Model Comparison — the rest of the request still succeeds.
@@ -490,6 +563,9 @@ pytest -q   # quiet summary across the whole suite
 | `test_rag_evaluator.py` | RAG Evaluation (9) — relevance/precision/recall scoring and error handling |
 | `test_prompt_evaluator.py` | Prompt Evaluation (7) — JSON repair, score/issue coercion |
 | `test_analysis_agent.py` | AI Analysis Agent (3) — batch formatting, pattern report generation |
+| `test_chunker.py` | Knowledge Base (11) — chunk sizing/overlap edge cases |
+| `test_vector_store.py` | Knowledge Base (11) — `KnowledgeBaseStore` add/query behavior |
+| `test_verification_agent.py` | Knowledge Base (11) — relevance threshold, best-match selection |
 
 No `ANTHROPIC_API_KEY` (or any other provider key) is required to run the suite.
 
@@ -499,7 +575,8 @@ No `ANTHROPIC_API_KEY` (or any other provider key) is required to run the suite.
 
 The built-in dashboard (`app/dashboard/index.html`, served at `/dashboard`) covers:
 Score Trends, Root Cause Breakdown, Recent Evaluations, the AI Analysis Report, Model
-Comparison, Prompt Evaluation, and MLOps Version Tracking.
+Comparison, Prompt Evaluation, MLOps Version Tracking, and Knowledge Base (upload a PDF to
+index it, then verify whether a question is actually supported by what's indexed).
 
 <!--
 Add screenshots here once available, e.g.:
@@ -518,7 +595,8 @@ Add screenshots here once available, e.g.:
 
 Python, FastAPI, SQLAlchemy, PostgreSQL (SQLite for local dev), Docker, Anthropic Claude
 API (with optional OpenAI, Google Gemini, and Qwen-via-OpenRouter support for Model
-Comparison).
+Comparison), ChromaDB (local vector store) and PyMuPDF (PDF extraction) for the Knowledge
+Base + Retrieval Verification Agent.
 
 ## Team — Nexus AI
 
