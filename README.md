@@ -311,6 +311,20 @@ curl "http://127.0.0.1:8000/api/v1/mlops/compare?version_a=claude-sonnet-5:1.0.0
 curl "http://127.0.0.1:8000/api/v1/mlops/report?project_id=support-bot"
 ```
 
+#### Improvement Journey
+
+The 5 seeded scenario batches (`scripts/seed_scenarios*.py` → `data/seed_scenarios*.json`)
+are a real record of pass rate improving over successive fixes, each tracked as its own
+`evaluator_version` so it's directly comparable via `GET /api/v1/mlops/compare`:
+
+| Version | Pass Rate | What Changed |
+|---|---|---|
+| `claude-sonnet-5:1.0.0` | 34.6% | Baseline. |
+| `claude-sonnet-5:1.1.0` | 48.9% | **Judge prompt fix** — the judge now scores a correct refusal (declining to answer when context is missing/insufficient) as a faithful pass instead of penalizing it. |
+| `claude-sonnet-5:gen1.1.0:judge1.1.0` | 59.8% | **Generation prompt hardening** — more forceful MUST/NOT phrasing and an explicit refusal example in the generation prompt, closing the "helpful guess" failure mode. |
+| `claude-sonnet-5:gen1.1.0:judge1.1.0:cmp1.0.0` | 68.8% | **Retry-with-clarification** — `compare_models()` now retries a model once with a corrective message when it fails to follow grounding instructions, instead of scoring the first attempt as final. |
+| `claude-sonnet-5:gen1.1.0:judge1.1.0:cmp1.1.0` | 73.6% | **Second retry + bug fixes** — a second, more pointed retry when the first still fails, plus a fix in `evaluator.py` where a leading `ThinkingBlock` from extended thinking was mistaken for the judge's answer (degrading the result to `status="error"`). |
+
 ---
 
 ### 11. Knowledge Base + Retrieval Verification Agent
