@@ -395,44 +395,44 @@ print(result.supported, result.best_relevance_score, result.matched_chunks)
 
 ```
 app/
-├── main.py                        # FastAPI app entrypoint, mounts the router, creates tables on startup
-├── config.py                      # Loads .env / environment variables into `settings`
-├── schemas/                       # Pydantic request/response models
+├── main.py
+├── config.py
+├── schemas/
 │   ├── health_check.py
 │   ├── model_comparison.py
 │   └── prompt_evaluation.py
 ├── evaluation/
-│   ├── prompts.py                 # Judge prompt templates + JUDGE_PROMPT_VERSION
-│   ├── evaluator.py                # (1) Core Evaluation — evaluate_answer()
-│   ├── prompt_evaluator.py         # (7) Prompt Evaluation — evaluate_prompt()
-│   └── rag_evaluator.py            # (9) RAG Evaluation — run_full_rag_evaluation()
+│   ├── prompts.py
+│   ├── evaluator.py
+│   ├── prompt_evaluator.py
+│   └── rag_evaluator.py
 ├── root_cause/
-│   ├── analyzer.py                 # (2) Root Cause Analysis + static Recommendation Engine
-│   └── smart_recommendation.py     # (4) Claude-generated recommendation upgrade
+│   ├── analyzer.py
+│   └── smart_recommendation.py
 ├── agents/
-│   └── analysis_agent.py           # (3) AI Analysis Agent — analyze_recent_patterns()
+│   └── analysis_agent.py
 ├── monitoring/
-│   ├── metrics.py                  # (5) Monitoring — get_metrics_summary()
-│   └── drift_detector.py           # (6) Drift Detection — check_drift()
+│   ├── metrics.py
+│   └── drift_detector.py
 ├── comparison/
-│   └── model_comparator.py         # (8) Model Comparison — compare_models()
+│   └── model_comparator.py
 ├── mlops/
-│   └── version_tracker.py          # (10) MLOps Integration — versions/compare/report
+│   └── version_tracker.py
 ├── knowledge_base/
-│   ├── document_loader.py          # (11) PDF text extraction (PyMuPDF)
-│   ├── chunker.py                  # (11) Fixed-size overlapping text chunking
-│   ├── vector_store.py             # (11) KnowledgeBaseStore — Chroma wrapper
-│   ├── indexing_service.py         # (11) index_pdf() — full ingest pipeline
-│   └── verification_agent.py       # (11) verify_question() — retrieval verification
+│   ├── document_loader.py
+│   ├── chunker.py
+│   ├── vector_store.py
+│   ├── indexing_service.py
+│   └── verification_agent.py
 ├── database/
-│   ├── models.py                   # SQLAlchemy models (EvaluationRecord)
-│   └── connection.py               # Engine/session setup + lightweight auto-migration
+│   ├── models.py
+│   └── connection.py
 ├── dashboard/
-│   └── index.html                  # Built-in dashboard (served at /dashboard)
+│   └── index.html
 └── api/
-    └── routes.py                   # All API endpoints, wired to the modules above
+    └── routes.py
 tests/
-├── conftest.py                     # Shared in-memory SQLite fixture (`db_session`)
+├── conftest.py
 ├── test_evaluator.py
 ├── test_model_comparator.py
 ├── test_version_tracker.py
@@ -443,17 +443,17 @@ tests/
 ├── test_vector_store.py
 └── test_verification_agent.py
 scripts/
-├── index_pdf_demo.py               # (11) Manual-test script: generates + indexes a sample PDF
-├── seed_scenarios.py               # Seeds data/seed_scenarios.json (evaluator v1.0.0 baseline)
-├── seed_scenarios_v2.py            # Seeds data/seed_scenarios_v2.json (judge prompt v1.1.0)
-├── seed_scenarios_v3.py            # Seeds data/seed_scenarios_v3.json (generation prompt hardening)
-├── seed_scenarios_v4.py            # Seeds data/seed_scenarios_v4.json (retry-with-clarification)
-└── seed_scenarios_v5.py            # Seeds data/seed_scenarios_v5.json (ThinkingBlock fix + 2nd retry)
+├── index_pdf_demo.py
+├── seed_scenarios.py
+├── seed_scenarios_v2.py
+├── seed_scenarios_v3.py
+├── seed_scenarios_v4.py
+└── seed_scenarios_v5.py
 data/
-├── seed_scenarios*.json            # Seed data consumed by scripts/seed_scenarios*.py
-└── chroma_db/                      # Local Chroma vector store (gitignored, created at runtime)
+├── seed_scenarios*.json
+└── chroma_db/
 notebooks/
-└── evaluator_prototype.ipynb       # Exploratory notebook
+└── evaluator_prototype.ipynb
 ```
 
 ---
